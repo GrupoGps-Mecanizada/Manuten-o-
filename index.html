@@ -188,9 +188,10 @@
         // ESTADO DA APLICAÇÃO
         // ============================================
         let state = {
-            view: 'login', // login, form, success, history
+            view: 'login', // login, form, success, history, close
             supervisor: '',
-            editingId: null, // ID do registro sendo editado
+            editingId: null,
+            closingId: null,
             placa: '',
             tipoEquipamento: '',
             tipoManutencao: '',
@@ -205,10 +206,11 @@
             responsavel: '',
             observacoes: '',
             statusOrdem: 'Aberta',
+            dataHoraAvaria: '',
+            dataHoraFechamento: '',
             searchTerm: '',
             isLoading: false,
             isSyncing: false,
-            locationCoords: null,
             historyFilter: 'all',
             showCustomManutencao: false,
             showCustomOficina: false,
@@ -259,6 +261,16 @@
             return `${d}/${m}/${y} ${h}:${min}`;
         }
 
+        function formatDateTimeLocal(isoDate) {
+            const date = new Date(isoDate);
+            const y = date.getFullYear();
+            const m = String(date.getMonth() + 1).padStart(2, '0');
+            const d = String(date.getDate()).padStart(2, '0');
+            const h = String(date.getHours()).padStart(2, '0');
+            const min = String(date.getMinutes()).padStart(2, '0');
+            return `${y}-${m}-${d}T${h}:${min}`;
+        }
+
         function getFilteredPlates() {
             return Object.keys(FLEET_DATA).filter(p => 
                 p.toLowerCase().includes(state.searchTerm.toLowerCase())
@@ -295,61 +307,22 @@
         }
 
         // ============================================
-        // GEOCODIFICAÇÃO REVERSA (LAT/LNG → ENDEREÇO)
-        // ============================================
-        async function reverseGeocode(lat, lng) {
-            try {
-                const response = await fetch(
-                    `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&accept-language=pt-BR`,
-                    {
-                        headers: {
-                            'User-Agent': 'ManutencaoFrotaApp/1.0'
-                        }
-                    }
-                );
-                
-                if (!response.ok) throw new Error('Erro na geocodificação');
-                
-                const data = await response.json();
-                
-                if (data.display_name) {
-                    return data.display_name;
-                } else if (data.address) {
-                    // Monta endereço manualmente
-                    const addr = data.address;
-                    let parts = [];
-                    if (addr.road) parts.push(addr.road);
-                    if (addr.house_number) parts.push(addr.house_number);
-                    if (addr.suburb) parts.push(addr.suburb);
-                    if (addr.city) parts.push(addr.city);
-                    if (addr.state) parts.push(addr.state);
-                    return parts.join(', ');
-                }
-                
-                return `GPS: ${lat.toFixed(5)}, ${lng.toFixed(5)}`;
-            } catch (error) {
-                console.error('Erro na geocodificação:', error);
-                return `GPS: ${lat.toFixed(5)}, ${lng.toFixed(5)}`;
-            }
-        }
-
-        // ============================================
         // INTEGRAÇÃO GOOGLE SHEETS
         // ============================================
         async function submitToSheet(record) {
             try {
                 const response = await fetch(GOOGLE_SCRIPT_URL, {
                     method: 'POST',
+                    mode: 'no-cors',
                     headers: { 
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify(record),
-                    redirect: 'follow'
+                    body: JSON.stringify(record)
                 });
                 
-                console.log('Resposta do servidor:', response.status);
+                console.log('Dados enviados para Google Sheets');
                 
-                // Com Apps Script, mesmo com no-cors, se chegou aqui sem erro, consideramos sucesso
+                // Com no-cors, assumimos sucesso se não houver erro
                 return { success: true };
                 
             } catch (error) {
@@ -360,11 +333,9 @@
 
         async function fetchFromSheet() {
             try {
-                const response = await fetch(GOOGLE_SCRIPT_URL + '?action=get', {
+                const response = await fetch(GOOGLE_SCRIPT_URL, {
                     method: 'GET',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    }
+                    mode: 'cors',
                 });
                 
                 const data = await response.json();
@@ -423,12 +394,12 @@
             if (!state.supervisor.trim()) return;
             localStorage.setItem('supervisor_name', state.supervisor);
             state.view = 'form';
-            startAutoSync(); // Inicia sincronização automática
+            startAutoSync();
             render();
         }
 
         function handleLogout() {
-            stopAutoSync(); // Para sincronização automática
+            stopAutoSync();
             localStorage.removeItem('supervisor_name');
             state.supervisor = '';
             state.view = 'login';
@@ -472,54 +443,39 @@
             render();
         }
 
-        async function handleGetLocation() {
-            if (navigator.geolocation) {
-                state.isLoading = true;
-                render();
-                
-                navigator.geolocation.getCurrentPosition(
-                    async (position) => {
-                        const lat = position.coords.latitude;
-                        const lng = position.coords.longitude;
-                        
-                        state.locationCoords = { lat, lng };
-                        
-                        // Busca endereço legível
-                        const address = await reverseGeocode(lat, lng);
-                        state.local = address;
-                        
-                        state.isLoading = false;
-                        render();
-                    },
-                    (error) => {
-                        console.error("Error getting location", error);
-                        alert("Não foi possível obter a localização. Verifique as permissões.");
-                        state.isLoading = false;
-                        render();
-                    }
-                );
-            } else {
-                alert("Geolocalização não suportada neste navegador.");
-            }
-        }
-
         async function handleSubmit() {
             const { placa, tipoManutencao, tipoManutencaoCustom, prioridade, tipoAvaria, 
-                    tipoAvariaCustom, descricao, local, oficina, oficinaCustom, responsavel } = state;
+                    tipoAvariaCustom, descricao, local, oficina, oficinaCustom, responsavel, dataHoraAvaria } = state;
             
-            // Validação básica (sem mínimo de caracteres)
-            if (!placa || !prioridade || !descricao || !local || !responsavel) {
+            // Validação básica
+            if (!placa || !prioridade || !descricao || !local || !responsavel || !dataHoraAvaria) {
                 alert("Por favor, preencha todos os campos obrigatórios marcados com *");
                 return;
             }
 
             // Determina valor final dos campos com opção "Outro"
-            const finalManutencao = tipoManutencao === 'Outro' ? tipoManutencaoCustom : tipoManutencao;
-            const finalOficina = oficina === 'Outro' ? oficinaCustom : oficina;
-            const finalAvaria = tipoAvaria === 'Outro' ? tipoAvariaCustom : tipoAvaria;
+            const finalManutencao = tipoManutencao === 'Outro' ? tipoManutencaoCustom.trim() : tipoManutencao;
+            const finalOficina = oficina === 'Outro' ? oficinaCustom.trim() : oficina;
+            const finalAvaria = tipoAvaria === 'Outro' ? tipoAvariaCustom.trim() : tipoAvaria;
 
             if (!finalManutencao || !finalOficina || !finalAvaria) {
                 alert("Por favor, preencha todos os campos obrigatórios.");
+                return;
+            }
+
+            // Validação de campos customizados
+            if (tipoManutencao === 'Outro' && tipoManutencaoCustom.trim().length < 3) {
+                alert("O tipo de manutenção deve ter pelo menos 3 caracteres.");
+                return;
+            }
+
+            if (oficina === 'Outro' && oficinaCustom.trim().length < 3) {
+                alert("O nome da oficina deve ter pelo menos 3 caracteres.");
+                return;
+            }
+
+            if (tipoAvaria === 'Outro' && tipoAvariaCustom.trim().length < 3) {
+                alert("O tipo de avaria deve ter pelo menos 3 caracteres.");
                 return;
             }
 
@@ -527,24 +483,25 @@
             render();
 
             const recordId = state.editingId || `${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}${String(new Date().getDate()).padStart(2, '0')}-${Math.floor(Math.random() * 10000)}`;
+            const now = new Date().toISOString();
 
             const newRecord = {
                 id: recordId,
-                dataHora: new Date().toISOString(),
+                dataHoraAbertura: state.editingId ? state.dataHoraAbertura : now,
+                dataHoraAvaria: new Date(state.dataHoraAvaria).toISOString(),
+                dataHoraFechamento: state.dataHoraFechamento || null,
                 supervisor: state.supervisor,
                 placa: state.placa,
                 tipoEquipamento: state.tipoEquipamento,
                 tipoManutencao: finalManutencao,
                 prioridade: state.prioridade,
                 tipoAvaria: finalAvaria,
-                descricaoAvaria: state.descricao,
-                localManutencao: state.local,
+                descricaoAvaria: state.descricao.trim(),
+                localManutencao: state.local.trim(),
                 oficina: finalOficina,
-                responsavelManutencao: state.responsavel,
-                observacoes: state.observacoes,
+                responsavelManutencao: state.responsavel.trim(),
+                observacoes: state.observacoes.trim(),
                 statusOrdem: state.statusOrdem,
-                latitude: state.locationCoords?.lat,
-                longitude: state.locationCoords?.lng,
                 status: 'pending'
             };
 
@@ -561,7 +518,7 @@
             }
 
             state.view = 'success';
-            state.editingId = null; // Limpa modo de edição
+            state.editingId = null;
             render();
         }
 
@@ -578,6 +535,9 @@
             state.editingId = record.id;
             state.placa = record.placa;
             state.tipoEquipamento = record.tipoEquipamento;
+            state.dataHoraAbertura = record.dataHoraAbertura;
+            state.dataHoraAvaria = record.dataHoraAvaria;
+            state.dataHoraFechamento = record.dataHoraFechamento;
             
             // Verifica se é valor customizado
             if (MAINTENANCE_TYPES.includes(record.tipoManutencao)) {
@@ -619,9 +579,6 @@
             state.responsavel = record.responsavelManutencao;
             state.observacoes = record.observacoes || '';
             state.statusOrdem = record.statusOrdem || 'Aberta';
-            state.locationCoords = record.latitude && record.longitude 
-                ? { lat: record.latitude, lng: record.longitude }
-                : null;
 
             state.view = 'form';
             render();
@@ -630,8 +587,70 @@
             window.scrollTo(0, 0);
         }
 
+        function loadRecordForClose(recordId) {
+            const history = getMaintenanceHistory();
+            const record = history.find(r => r.id === recordId);
+            
+            if (!record) {
+                alert('Registro não encontrado');
+                return;
+            }
+
+            if (record.statusOrdem === 'Concluída' || record.statusOrdem === 'Cancelada') {
+                alert('Esta ordem já está fechada.');
+                return;
+            }
+
+            state.closingId = record.id;
+            state.dataHoraFechamento = formatDateTimeLocal(new Date().toISOString());
+            state.view = 'close';
+            render();
+        }
+
+        async function handleCloseOrder() {
+            if (!state.dataHoraFechamento) {
+                alert('Por favor, informe a data e hora de retorno do equipamento.');
+                return;
+            }
+
+            state.isLoading = true;
+            render();
+
+            const history = getMaintenanceHistory();
+            const record = history.find(r => r.id === state.closingId);
+
+            if (!record) {
+                alert('Registro não encontrado');
+                state.isLoading = false;
+                render();
+                return;
+            }
+
+            // Atualiza o registro
+            record.dataHoraFechamento = new Date(state.dataHoraFechamento).toISOString();
+            record.statusOrdem = 'Concluída';
+            record.status = 'pending';
+
+            saveToHistory(record);
+
+            // Tenta enviar para Google Sheets
+            const result = await submitToSheet(record);
+
+            state.isLoading = false;
+
+            if (result.success) {
+                updateHistoryStatus(record.id, 'synced');
+            }
+
+            state.closingId = null;
+            state.dataHoraFechamento = '';
+            state.view = 'success';
+            render();
+        }
+
         function resetForm() {
             state.editingId = null;
+            state.closingId = null;
             state.placa = '';
             state.tipoEquipamento = '';
             state.tipoManutencao = '';
@@ -646,8 +665,9 @@
             state.responsavel = '';
             state.observacoes = '';
             state.statusOrdem = 'Aberta';
+            state.dataHoraAvaria = '';
+            state.dataHoraFechamento = '';
             state.searchTerm = '';
-            state.locationCoords = null;
             state.showCustomManutencao = false;
             state.showCustomOficina = false;
             state.showCustomAvaria = false;
@@ -667,7 +687,7 @@
             if (success) {
                 alert('Sincronização concluída com sucesso!');
             } else {
-                alert('Erro na sincronização. Verifique sua conexão.');
+                alert('Erro na sincronização. Os dados serão enviados quando possível.');
             }
         }
 
@@ -736,6 +756,87 @@
                     >
                         VER HISTÓRICO
                     </button>
+                </div>
+            `;
+        }
+
+        // ============================================
+        // RENDERIZAÇÃO - TELA DE FECHAMENTO
+        // ============================================
+        function renderCloseOrder() {
+            const history = getMaintenanceHistory();
+            const record = history.find(r => r.id === state.closingId);
+
+            if (!record) {
+                return `<div class="p-4 text-center">Registro não encontrado</div>`;
+            }
+
+            return `
+                <div class="space-y-4">
+                    <div class="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+                        <h3 class="font-bold text-[#1F4E78] mb-4 flex items-center gap-2 border-b pb-2">
+                            <i class="ph ph-check-circle text-xl"></i> Fechar Ordem de Manutenção
+                        </h3>
+
+                        <div class="bg-blue-50 p-4 rounded-lg mb-4">
+                            <div class="space-y-2 text-sm">
+                                <div class="flex justify-between">
+                                    <span class="font-semibold text-gray-600">Placa:</span>
+                                    <span class="text-gray-800">${record.placa}</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span class="font-semibold text-gray-600">Tipo:</span>
+                                    <span class="text-gray-800">${record.tipoEquipamento}</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span class="font-semibold text-gray-600">Abertura:</span>
+                                    <span class="text-gray-800">${formatDate(record.dataHoraAbertura)}</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span class="font-semibold text-gray-600">Avaria:</span>
+                                    <span class="text-gray-800">${formatDate(record.dataHoraAvaria)}</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="mb-4">
+                            <label class="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-1 block">
+                                Data e Hora de Retorno <span class="text-red-500">*</span>
+                            </label>
+                            <input
+                                type="datetime-local"
+                                class="w-full border border-gray-300 rounded-lg p-3 focus:ring-2 focus:ring-[#1F4E78]"
+                                value="${state.dataHoraFechamento}"
+                                oninput="state.dataHoraFechamento = this.value; render()"
+                                required
+                            />
+                            <p class="text-xs text-gray-500 mt-1">Informe quando o equipamento retornou</p>
+                        </div>
+
+                        <div class="flex gap-2">
+                            <button
+                                onclick="state.view='history'; state.closingId=null; render()"
+                                class="flex-1 border-2 border-gray-300 text-gray-600 font-bold py-3 rounded-xl"
+                            >
+                                CANCELAR
+                            </button>
+                            <button
+                                onclick="handleCloseOrder()"
+                                ${state.isLoading ? 'disabled' : ''}
+                                class="flex-1 py-3 rounded-xl text-white font-bold flex justify-center items-center gap-2 ${
+                                    state.isLoading ? 'bg-gray-400 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700'
+                                }"
+                            >
+                                ${state.isLoading ? `
+                                    <i class="ph ph-spinner animate-spin"></i>
+                                    FECHANDO...
+                                ` : `
+                                    <i class="ph ph-check-circle"></i>
+                                    FECHAR ORDEM
+                                `}
+                            </button>
+                        </div>
+                    </div>
                 </div>
             `;
         }
@@ -810,7 +911,11 @@
                             <div class="flex justify-between items-start mb-3">
                                 <div>
                                     <h3 class="font-bold text-lg text-gray-800">${record.placa}</h3>
-                                    <p class="text-xs text-gray-500">${formatDate(record.dataHora)}</p>
+                                    <p class="text-xs text-gray-500">Abertura: ${formatDate(record.dataHoraAbertura)}</p>
+                                    <p class="text-xs text-gray-500">Avaria: ${formatDate(record.dataHoraAvaria)}</p>
+                                    ${record.dataHoraFechamento ? `
+                                        <p class="text-xs text-green-600 font-semibold">Fechamento: ${formatDate(record.dataHoraFechamento)}</p>
+                                    ` : ''}
                                 </div>
                                 <div class="flex flex-col items-end gap-2">
                                     <span class="px-3 py-1 rounded-full text-xs font-bold border ${getPriorityColorHistory(record.prioridade)}">
@@ -860,13 +965,24 @@
                                 ` : ''}
                             </div>
 
-                            <button
-                                onclick="loadRecordForEdit('${record.id}')"
-                                class="w-full bg-blue-500 text-white py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2"
-                            >
-                                <i class="ph ph-pencil-simple"></i>
-                                EDITAR ORDEM
-                            </button>
+                            <div class="flex gap-2">
+                                <button
+                                    onclick="loadRecordForEdit('${record.id}')"
+                                    class="flex-1 bg-blue-500 text-white py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2"
+                                >
+                                    <i class="ph ph-pencil-simple"></i>
+                                    EDITAR
+                                </button>
+                                ${record.statusOrdem !== 'Concluída' && record.statusOrdem !== 'Cancelada' ? `
+                                    <button
+                                        onclick="loadRecordForClose('${record.id}')"
+                                        class="flex-1 bg-green-600 text-white py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2"
+                                    >
+                                        <i class="ph ph-check-circle"></i>
+                                        FECHAR
+                                    </button>
+                                ` : ''}
+                            </div>
                         </div>
                     `).join('')}
                 </div>
@@ -950,6 +1066,21 @@
                         </h3>
 
                         <div class="mb-4">
+                            <label class="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-1 block">
+                                Data e Hora da Avaria <span class="text-red-500">*</span>
+                            </label>
+                            <input
+                                type="datetime-local"
+                                class="w-full border border-gray-300 rounded-lg p-3 focus:ring-2 focus:ring-[#1F4E78]"
+                                value="${state.dataHoraAvaria}"
+                                max="${formatDateTimeLocal(new Date().toISOString())}"
+                                oninput="state.dataHoraAvaria = this.value"
+                                required
+                            />
+                            <p class="text-xs text-gray-500 mt-1">Quando o problema foi identificado?</p>
+                        </div>
+
+                        <div class="mb-4">
                             <label class="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-1 block">Tipo de Manutenção <span class="text-red-500">*</span></label>
                             <select
                                 class="w-full border border-gray-300 bg-white rounded-lg p-3 focus:ring-2 focus:ring-[#1F4E78]"
@@ -965,9 +1096,10 @@
                                 <input
                                     type="text"
                                     class="w-full border border-gray-300 rounded-lg p-3 mt-2 focus:ring-2 focus:ring-[#1F4E78]"
-                                    placeholder="Digite o tipo de manutenção..."
+                                    placeholder="Digite o tipo de manutenção (mín. 3 caracteres)..."
                                     value="${state.tipoManutencaoCustom}"
                                     oninput="state.tipoManutencaoCustom = this.value"
+                                    minlength="3"
                                 />
                             ` : ''}
                         </div>
@@ -1010,9 +1142,10 @@
                                     <input
                                         type="text"
                                         class="w-full border border-gray-300 rounded-lg p-3 mt-2 focus:ring-2 focus:ring-[#1F4E78]"
-                                        placeholder="Digite o tipo de avaria..."
+                                        placeholder="Digite o tipo de avaria (mín. 3 caracteres)..."
                                         value="${state.tipoAvariaCustom}"
                                         oninput="state.tipoAvariaCustom = this.value"
+                                        minlength="3"
                                     />
                                 ` : ''}
                             </div>
@@ -1022,7 +1155,7 @@
                             <label class="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-1 block">Descrição Detalhada <span class="text-red-500">*</span></label>
                             <textarea
                                 class="w-full border border-gray-300 rounded-lg p-3 focus:ring-2 focus:ring-[#1F4E78] resize-none"
-                                placeholder="Descreva o problema, ruídos, vazamentos..."
+                                placeholder="Descreva o problema, ruídos, vazamentos, etc..."
                                 rows="4"
                                 oninput="state.descricao = this.value"
                             >${state.descricao}</textarea>
@@ -1036,23 +1169,12 @@
                                     value="${state.statusOrdem}"
                                     onchange="state.statusOrdem = this.value; render()"
                                 >
-                                    ${STATUS_OPTIONS.map(status => `
+                                    ${STATUS_OPTIONS.filter(s => s !== 'Concluída').map(status => `
                                         <option value="${status}" ${state.statusOrdem === status ? 'selected' : ''}>${status}</option>
                                     `).join('')}
                                 </select>
                             </div>
                         ` : ''}
-
-                        <div class="mb-4">
-                            <label class="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-1 block">Foto da Avaria (Opcional)</label>
-                            <label class="flex flex-col items-center justify-center w-full h-32 border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100">
-                                <div class="flex flex-col items-center justify-center pt-5 pb-6">
-                                    <i class="ph ph-camera text-3xl text-gray-400 mb-2"></i>
-                                    <p class="text-xs text-gray-500">Toque para capturar</p>
-                                </div>
-                                <input type="file" class="hidden" accept="image/*" capture="environment" />
-                            </label>
-                        </div>
                     </div>
 
                     <!-- CARD 3: EXECUÇÃO -->
@@ -1061,25 +1183,15 @@
                             <i class="ph ph-map-pin text-xl"></i> Local & Execução
                         </h3>
 
-                        <div class="relative mb-4">
-                            <div class="mb-4">
-                                <label class="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-1 block">Local da Manutenção <span class="text-red-500">*</span></label>
-                                <input
-                                    type="text"
-                                    class="w-full border border-gray-300 rounded-lg p-3 pr-12 focus:ring-2 focus:ring-[#1F4E78] focus:border-transparent"
-                                    placeholder="Ex: Base, Cliente X, Rodovia Y"
-                                    value="${state.local}"
-                                    oninput="state.local = this.value"
-                                />
-                            </div>
-                            <button 
-                                onclick="handleGetLocation()"
-                                class="absolute right-2 top-8 p-2 text-[#1F4E78]"
-                                title="Usar GPS"
-                                ${state.isLoading ? 'disabled' : ''}
-                            >
-                                <i class="ph ph-crosshair text-2xl ${state.isLoading ? 'animate-spin' : ''}"></i>
-                            </button>
+                        <div class="mb-4">
+                            <label class="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-1 block">Local da Manutenção <span class="text-red-500">*</span></label>
+                            <input
+                                type="text"
+                                class="w-full border border-gray-300 rounded-lg p-3 focus:ring-2 focus:ring-[#1F4E78] focus:border-transparent"
+                                placeholder="Ex: Base, Cliente X, Rodovia Y, Km 45..."
+                                value="${state.local}"
+                                oninput="state.local = this.value"
+                            />
                         </div>
 
                         <div class="mb-4">
@@ -1098,9 +1210,10 @@
                                 <input
                                     type="text"
                                     class="w-full border border-gray-300 rounded-lg p-3 mt-2 focus:ring-2 focus:ring-[#1F4E78]"
-                                    placeholder="Digite o nome da oficina..."
+                                    placeholder="Digite o nome da oficina (mín. 3 caracteres)..."
                                     value="${state.oficinaCustom}"
                                     oninput="state.oficinaCustom = this.value"
+                                    minlength="3"
                                 />
                             ` : ''}
                         </div>
@@ -1160,8 +1273,26 @@
                 app.innerHTML = renderLogin();
             } else if (state.view === 'success') {
                 app.innerHTML = renderSuccess();
+            } else if (state.view === 'close') {
+                // Tela de fechamento
+                app.innerHTML = `
+                    <div class="min-h-screen bg-[#F5F5F5] pb-10">
+                        <header class="bg-[#1F4E78] text-white p-4 sticky top-0 z-10 shadow-md flex justify-between items-center">
+                            <div>
+                                <h1 class="font-bold text-lg">Fechar Ordem</h1>
+                                <p class="text-xs opacity-80">Supervisor: ${state.supervisor}</p>
+                            </div>
+                            <button onclick="state.view='history'; state.closingId=null; render()" class="p-2 rounded-full hover:bg-white/10">
+                                <i class="ph ph-x text-2xl"></i>
+                            </button>
+                        </header>
+                        <main class="p-4 max-w-lg mx-auto">
+                            ${renderCloseOrder()}
+                        </main>
+                    </div>
+                `;
             } else {
-                // Header + Content
+                // Header + Content (form ou history)
                 const isHistory = state.view === 'history';
                 app.innerHTML = `
                     <div class="min-h-screen bg-[#F5F5F5] pb-10">
@@ -1200,7 +1331,7 @@
             if (savedSupervisor) {
                 state.supervisor = savedSupervisor;
                 state.view = 'form';
-                startAutoSync(); // Inicia sincronização automática
+                startAutoSync();
             }
             
             render();
