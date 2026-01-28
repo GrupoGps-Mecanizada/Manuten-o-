@@ -1,0 +1,810 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Manutenção Frota</title>
+    <meta name="theme-color" content="#1F4E78">
+    
+    <!-- Phosphor Icons -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <style>
+        body {
+            -webkit-tap-highlight-color: transparent;
+            overscroll-behavior-y: none;
+        }
+        
+        .animate-bounce {
+            animation: bounce 1s infinite;
+        }
+        
+        @keyframes bounce {
+            0%, 100% {
+                transform: translateY(-25%);
+                animation-timing-function: cubic-bezier(0.8, 0, 1, 1);
+            }
+            50% {
+                transform: translateY(0);
+                animation-timing-function: cubic-bezier(0, 0, 0.2, 1);
+            }
+        }
+        
+        .animate-spin {
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            from {
+                transform: rotate(0deg);
+            }
+            to {
+                transform: rotate(360deg);
+            }
+        }
+    </style>
+</head>
+<body class="bg-gray-100">
+    <div id="app"></div>
+
+    <script>
+        // ============================================
+        // CONFIGURAÇÃO - ALTERE AQUI A URL DO GOOGLE SCRIPT
+        // ============================================
+        const GOOGLE_SCRIPT_URL = 'REPLACE_WITH_YOUR_DEPLOYED_WEB_APP_URL';
+        
+        // ============================================
+        // DADOS DA FROTA
+        // ============================================
+        const FLEET_DATA = {
+            "CZC-0453": "CAMINHÃO ALTA PRESSÃO",
+            "DSY6472": "CAMINHÃO ALTA PRESSÃO",
+            "DSY6474": "CAMINHÃO ALTA PRESSÃO",
+            "DSY6475": "CAMINHÃO ALTA PRESSÃO",
+            "DSY6F81": "CAMINHÃO ALTA PRESSÃO",
+            "EAM-3253": "CAMINHÃO ALTA PRESSÃO",
+            "EAM3255": "CAMINHÃO ALTA PRESSÃO",
+            "EAM3256": "CAMINHÃO ALTA PRESSÃO",
+            "EAM3262": "CAMINHÃO ALTA PRESSÃO",
+            "EGC2978": "CAMINHÃO ALTA PRESSÃO",
+            "EGC2983": "CAMINHÃO ALTA PRESSÃO",
+            "EGC2985": "CAMINHÃO ALTA PRESSÃO",
+            "EGC2989": "CAMINHÃO ALTA PRESSÃO",
+            "EZS8764": "CAMINHÃO ALTA PRESSÃO",
+            "LUX-3201": "CAMINHÃO ALTA PRESSÃO",
+            "PUB2F80": "CAMINHÃO ALTA PRESSÃO",
+            "ALY5322": "CAMINHÃO AUTO VÁCUO",
+            "ANF-2676": "CAMINHÃO AUTO VÁCUO",
+            "CUB0763": "CAMINHÃO AUTO VÁCUO",
+            "DSY6473": "CAMINHÃO AUTO VÁCUO",
+            "DSY6577": "CAMINHÃO AUTO VÁCUO",
+            "DYB7210": "CAMINHÃO AUTO VÁCUO",
+            "EAM3251": "CAMINHÃO AUTO VÁCUO",
+            "EAM3257": "CAMINHÃO AUTO VÁCUO",
+            "EGC2993": "CAMINHÃO AUTO VÁCUO",
+            "FSA3D71": "CAMINHÃO AUTO VÁCUO",
+            "HJS1097": "CAMINHÃO AUTO VÁCUO",
+            "DSY6477": "CAMINHÃO BROOK",
+            "EGC-2984": "CAMINHÃO BROOK",
+            "EPN2463": "CAMINHÃO BROOK",
+            "HKH2H79": "CAMINHÃO BROOK",
+            "DSY6471": "CAMINHÃO HIPER VÁCUO",
+            "FHD9264": "CAMINHÃO HIPER VÁCUO",
+            "FMD2200": "CAMINHÃO HIPER VÁCUO",
+            "ASP02": "ASPIRADOR",
+            "ASP04": "ASPIRADOR",
+            "ASP06": "ASPIRADOR",
+            "ASP07": "ASPIRADOR",
+            "ASP08": "ASPIRADOR",
+            "ASP09": "ASPIRADOR",
+            "ASP10": "ASPIRADOR",
+            "ASP12": "ASPIRADOR",
+            "ASP12-RESERVA": "ASPIRADOR",
+            "ASPII": "ASPIRADOR"
+        };
+
+        const MAINTENANCE_TYPES = [
+            "Preventiva",
+            "Corretiva",
+            "Preditiva",
+            "Emergencial"
+        ];
+
+        const WORKSHOPS = [
+            "Oficina Interna",
+            "Oficina Externa - A definir",
+            "Mecânica Diesel",
+            "Especializada Bomba",
+            "Especializada Hidráulica",
+            "Concessionária",
+            "Em Campo (Emergencial)"
+        ];
+
+        const FAILURES_BY_TYPE = {
+            "CAMINHÃO ALTA PRESSÃO": [
+                "Bomba Alta Pressão", "Mangueira Alta Pressão", "Bico Rotativo", "Motor Bomba",
+                "Sistema Hidráulico", "Válvulas de Pressão", "Filtros Bomba", "Tanque de Água",
+                "Motor do Caminhão", "Transmissão", "Freios", "Suspensão", "Sistema Elétrico", "Pneus", "Outros"
+            ],
+            "CAMINHÃO AUTO VÁCUO": [
+                "Bomba de Vácuo", "Tanque de Sucção", "Mangueira de Sucção", "Sistema de Descarga",
+                "Válvulas de Vácuo", "Filtros", "Sistema Hidráulico",
+                "Motor do Caminhão", "Transmissão", "Freios", "Suspensão", "Sistema Elétrico", "Pneus", "Outros"
+            ],
+            "CAMINHÃO HIPER VÁCUO": [
+                "Bomba de Vácuo", "Tanque de Sucção", "Mangueira de Sucção", "Sistema de Descarga",
+                "Válvulas de Vácuo", "Filtros", "Sistema Hidráulico",
+                "Motor do Caminhão", "Transmissão", "Freios", "Suspensão", "Sistema Elétrico", "Pneus", "Outros"
+            ],
+            "CAMINHÃO BROOK": [
+                "Sistema de Desobstrução", "Lança/Braço Mecânico", "Mangueiras", "Sistema Hidráulico",
+                "Cabos de Aço", "Filtros",
+                "Motor do Caminhão", "Transmissão", "Freios", "Suspensão", "Sistema Elétrico", "Pneus", "Outros"
+            ],
+            "ASPIRADOR": [
+                "Motor de Sucção", "Filtros", "Mangueiras", "Sistema Elétrico", "Tanque", "Outros"
+            ]
+        };
+
+        const PRIORITIES = ["URGENTE", "ALTA", "MEDIA", "BAIXA"];
+
+        // ============================================
+        // ESTADO DA APLICAÇÃO
+        // ============================================
+        let state = {
+            view: 'login', // login, form, success, history
+            supervisor: '',
+            placa: '',
+            tipoEquipamento: '',
+            tipoManutencao: '',
+            prioridade: '',
+            tipoAvaria: '',
+            descricao: '',
+            local: '',
+            oficina: '',
+            responsavel: '',
+            observacoes: '',
+            searchTerm: '',
+            isLoading: false,
+            locationCoords: null,
+            historyFilter: 'all'
+        };
+
+        // ============================================
+        // FUNÇÕES DE UTILIDADE
+        // ============================================
+        function getPriorityColor(priority) {
+            const colors = {
+                'URGENTE': 'bg-red-500 text-white border-red-500',
+                'ALTA': 'bg-orange-500 text-white border-orange-500',
+                'MEDIA': 'bg-yellow-400 text-black border-yellow-400',
+                'BAIXA': 'bg-green-500 text-white border-green-500'
+            };
+            return colors[priority] || 'bg-white text-gray-600 border-gray-300';
+        }
+
+        function getPriorityColorHistory(priority) {
+            const colors = {
+                'URGENTE': 'bg-red-100 text-red-800 border-red-300',
+                'ALTA': 'bg-orange-100 text-orange-800 border-orange-300',
+                'MEDIA': 'bg-yellow-100 text-yellow-800 border-yellow-300',
+                'BAIXA': 'bg-green-100 text-green-800 border-green-300'
+            };
+            return colors[priority] || 'bg-gray-100 text-gray-800 border-gray-300';
+        }
+
+        function formatDate(isoDate) {
+            const date = new Date(isoDate);
+            const d = String(date.getDate()).padStart(2, '0');
+            const m = String(date.getMonth() + 1).padStart(2, '0');
+            const y = date.getFullYear();
+            const h = String(date.getHours()).padStart(2, '0');
+            const min = String(date.getMinutes()).padStart(2, '0');
+            return `${d}/${m}/${y} ${h}:${min}`;
+        }
+
+        function getFilteredPlates() {
+            return Object.keys(FLEET_DATA).filter(p => 
+                p.toLowerCase().includes(state.searchTerm.toLowerCase())
+            );
+        }
+
+        function getMaintenanceHistory() {
+            const history = localStorage.getItem('maintenance_history');
+            return history ? JSON.parse(history) : [];
+        }
+
+        function saveToHistory(record) {
+            const history = getMaintenanceHistory();
+            history.unshift(record);
+            localStorage.setItem('maintenance_history', JSON.stringify(history));
+        }
+
+        function updateHistoryStatus(id, status) {
+            const history = getMaintenanceHistory();
+            const index = history.findIndex(r => r.id === id);
+            if (index !== -1) {
+                history[index].status = status;
+                localStorage.setItem('maintenance_history', JSON.stringify(history));
+            }
+        }
+
+        // ============================================
+        // INTEGRAÇÃO GOOGLE SHEETS
+        // ============================================
+        async function submitToSheet(record) {
+            if (GOOGLE_SCRIPT_URL.includes('REPLACE')) {
+                console.warn('Google Script URL not configured');
+                return { success: false, message: 'URL não configurada' };
+            }
+
+            try {
+                await fetch(GOOGLE_SCRIPT_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(record),
+                    mode: 'no-cors'
+                });
+                
+                console.log('Dados enviados para Google Sheets');
+                return { success: true };
+            } catch (error) {
+                console.error('Erro ao enviar:', error);
+                return { success: false, message: error.message };
+            }
+        }
+
+        // ============================================
+        // HANDLERS
+        // ============================================
+        function handleLogin(e) {
+            e.preventDefault();
+            if (!state.supervisor.trim()) return;
+            localStorage.setItem('supervisor_name', state.supervisor);
+            state.view = 'form';
+            render();
+        }
+
+        function handleLogout() {
+            localStorage.removeItem('supervisor_name');
+            state.supervisor = '';
+            state.view = 'login';
+            render();
+        }
+
+        function handlePlacaChange(placa) {
+            state.placa = placa;
+            state.tipoEquipamento = FLEET_DATA[placa] || '';
+            state.tipoAvaria = '';
+            state.searchTerm = '';
+            render();
+        }
+
+        function handleGetLocation() {
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        state.locationCoords = {
+                            lat: position.coords.latitude,
+                            lng: position.coords.longitude
+                        };
+                        state.local = `GPS: ${position.coords.latitude.toFixed(5)}, ${position.coords.longitude.toFixed(5)}`;
+                        render();
+                    },
+                    (error) => {
+                        console.error("Error getting location", error);
+                        alert("Não foi possível obter a localização. Verifique as permissões.");
+                    }
+                );
+            } else {
+                alert("Geolocalização não suportada neste navegador.");
+            }
+        }
+
+        async function handleSubmit() {
+            const { placa, tipoManutencao, prioridade, tipoAvaria, descricao, local, oficina, responsavel } = state;
+            
+            if (!placa || !tipoManutencao || !prioridade || !tipoAvaria || !descricao || !local || !oficina || !responsavel) {
+                alert("Por favor, preencha todos os campos obrigatórios.");
+                return;
+            }
+
+            if (GOOGLE_SCRIPT_URL.includes('REPLACE')) {
+                alert("Atenção: A URL do Script Google ainda não foi configurada. O envio será simulado.");
+            }
+
+            state.isLoading = true;
+            render();
+
+            const newRecord = {
+                id: `${new Date().getFullYear()}${new Date().getMonth() + 1}${new Date().getDate()}-${Math.floor(Math.random() * 1000)}`,
+                dataHora: new Date().toISOString(),
+                supervisor: state.supervisor,
+                placa: state.placa,
+                tipoEquipamento: state.tipoEquipamento,
+                tipoManutencao: state.tipoManutencao,
+                prioridade: state.prioridade,
+                tipoAvaria: state.tipoAvaria,
+                descricaoAvaria: state.descricao,
+                localManutencao: state.local,
+                oficina: state.oficina,
+                responsavelManutencao: state.responsavel,
+                observacoes: state.observacoes,
+                latitude: state.locationCoords?.lat,
+                longitude: state.locationCoords?.lng,
+                status: 'pending'
+            };
+
+            saveToHistory(newRecord);
+
+            const result = await submitToSheet(newRecord);
+
+            state.isLoading = false;
+
+            if (result.success) {
+                updateHistoryStatus(newRecord.id, 'synced');
+            }
+
+            state.view = 'success';
+            render();
+        }
+
+        function resetForm() {
+            state.placa = '';
+            state.tipoEquipamento = '';
+            state.tipoManutencao = '';
+            state.prioridade = '';
+            state.tipoAvaria = '';
+            state.descricao = '';
+            state.local = '';
+            state.oficina = '';
+            state.responsavel = '';
+            state.observacoes = '';
+            state.searchTerm = '';
+            state.locationCoords = null;
+            state.view = 'form';
+            render();
+        }
+
+        function clearHistory() {
+            if (confirm('Deseja realmente limpar todo o histórico?')) {
+                localStorage.removeItem('maintenance_history');
+                render();
+            }
+        }
+
+        // ============================================
+        // RENDERIZAÇÃO - TELA DE LOGIN
+        // ============================================
+        function renderLogin() {
+            return `
+                <div class="min-h-screen flex flex-col justify-center items-center p-6 bg-[#1F4E78]">
+                    <div class="bg-white p-8 rounded-2xl w-full max-w-sm shadow-2xl">
+                        <div class="flex justify-center mb-6 text-[#1F4E78]">
+                            <i class="ph ph-wrench text-6xl"></i>
+                        </div>
+                        <h1 class="text-2xl font-bold text-center text-gray-800 mb-2">Manutenção Frota</h1>
+                        <p class="text-center text-gray-500 mb-8">Identificação do Supervisor</p>
+                        <form onsubmit="handleLogin(event)">
+                            <div class="mb-4">
+                                <label class="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-1 block">
+                                    Nome do Supervisor <span class="text-red-500">*</span>
+                                </label>
+                                <input
+                                    type="text"
+                                    class="w-full border border-gray-300 rounded-lg p-3 focus:ring-2 focus:ring-[#1F4E78] focus:border-transparent"
+                                    placeholder="Ex: João Silva"
+                                    value="${state.supervisor}"
+                                    oninput="state.supervisor = this.value"
+                                    required
+                                />
+                            </div>
+                            <button 
+                                type="submit" 
+                                class="w-full bg-[#70AD47] text-white font-bold py-4 rounded-xl mt-4 active:scale-95 transition-transform shadow-lg"
+                            >
+                                ENTRAR
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            `;
+        }
+
+        // ============================================
+        // RENDERIZAÇÃO - TELA DE SUCESSO
+        // ============================================
+        function renderSuccess() {
+            return `
+                <div class="min-h-screen flex flex-col justify-center items-center p-6 bg-white text-center">
+                    <div class="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center mb-6 animate-bounce">
+                        <i class="ph ph-check text-5xl text-[#70AD47]"></i>
+                    </div>
+                    <h2 class="text-3xl font-bold text-gray-800 mb-2">Sucesso!</h2>
+                    <p class="text-gray-600 mb-8 max-w-xs mx-auto">A ordem de manutenção foi registrada e salva com segurança.</p>
+                    
+                    <button 
+                        onclick="resetForm()"
+                        class="w-full max-w-sm bg-[#1F4E78] text-white font-bold py-4 rounded-xl shadow-lg mb-4"
+                    >
+                        NOVA MANUTENÇÃO
+                    </button>
+                    <button 
+                        onclick="state.view='history'; render()"
+                        class="w-full max-w-sm border-2 border-gray-200 text-gray-600 font-bold py-4 rounded-xl"
+                    >
+                        VER HISTÓRICO
+                    </button>
+                </div>
+            `;
+        }
+
+        // ============================================
+        // RENDERIZAÇÃO - HISTÓRICO
+        // ============================================
+        function renderHistory() {
+            const records = getMaintenanceHistory();
+            const filtered = records.filter(r => {
+                if (state.historyFilter === 'all') return true;
+                return r.status === state.historyFilter;
+            });
+
+            return `
+                <div class="space-y-4">
+                    <div class="bg-white p-4 rounded-2xl shadow-sm border border-gray-100">
+                        <div class="flex justify-between items-center mb-4">
+                            <h2 class="font-bold text-lg text-[#1F4E78]">Histórico</h2>
+                            ${records.length > 0 ? `
+                                <button onclick="clearHistory()" class="text-red-500 text-sm font-semibold">
+                                    Limpar
+                                </button>
+                            ` : ''}
+                        </div>
+
+                        <div class="flex gap-2 mb-4">
+                            <button
+                                onclick="state.historyFilter='all'; render()"
+                                class="px-4 py-2 rounded-lg text-sm font-semibold ${state.historyFilter === 'all' ? 'bg-[#1F4E78] text-white' : 'bg-gray-100 text-gray-600'}"
+                            >
+                                Todos (${records.length})
+                            </button>
+                            <button
+                                onclick="state.historyFilter='synced'; render()"
+                                class="px-4 py-2 rounded-lg text-sm font-semibold ${state.historyFilter === 'synced' ? 'bg-green-500 text-white' : 'bg-gray-100 text-gray-600'}"
+                            >
+                                Sincronizados
+                            </button>
+                            <button
+                                onclick="state.historyFilter='pending'; render()"
+                                class="px-4 py-2 rounded-lg text-sm font-semibold ${state.historyFilter === 'pending' ? 'bg-orange-500 text-white' : 'bg-gray-100 text-gray-600'}"
+                            >
+                                Pendentes
+                            </button>
+                        </div>
+                    </div>
+
+                    ${filtered.length === 0 ? `
+                        <div class="bg-white p-8 rounded-2xl shadow-sm border border-gray-100 text-center">
+                            <i class="ph ph-clock-counter-clockwise text-5xl text-gray-300 mb-3"></i>
+                            <p class="text-gray-500">Nenhum registro encontrado</p>
+                        </div>
+                    ` : filtered.map(record => `
+                        <div class="bg-white p-4 rounded-2xl shadow-sm border border-gray-100">
+                            <div class="flex justify-between items-start mb-3">
+                                <div>
+                                    <h3 class="font-bold text-lg text-gray-800">${record.placa}</h3>
+                                    <p class="text-xs text-gray-500">${formatDate(record.dataHora)}</p>
+                                </div>
+                                <div class="flex flex-col items-end gap-2">
+                                    <span class="px-3 py-1 rounded-full text-xs font-bold border ${getPriorityColorHistory(record.prioridade)}">
+                                        ${record.prioridade}
+                                    </span>
+                                    ${record.status === 'synced' ? `
+                                        <span class="flex items-center gap-1 text-green-600 text-xs">
+                                            <i class="ph ph-check-circle"></i> Sincronizado
+                                        </span>
+                                    ` : `
+                                        <span class="flex items-center gap-1 text-orange-600 text-xs">
+                                            <i class="ph ph-warning-circle"></i> Pendente
+                                        </span>
+                                    `}
+                                </div>
+                            </div>
+
+                            <div class="space-y-2 text-sm">
+                                <div class="flex gap-2">
+                                    <span class="font-semibold text-gray-600">Tipo:</span>
+                                    <span class="text-gray-800">${record.tipoManutencao}</span>
+                                </div>
+                                <div class="flex gap-2">
+                                    <span class="font-semibold text-gray-600">Avaria:</span>
+                                    <span class="text-gray-800">${record.tipoAvaria}</span>
+                                </div>
+                                <div class="flex gap-2">
+                                    <span class="font-semibold text-gray-600">Local:</span>
+                                    <span class="text-gray-800">${record.localManutencao}</span>
+                                </div>
+                                <div class="flex gap-2">
+                                    <span class="font-semibold text-gray-600">Oficina:</span>
+                                    <span class="text-gray-800">${record.oficina}</span>
+                                </div>
+                                ${record.descricaoAvaria ? `
+                                    <div class="pt-2 border-t border-gray-100">
+                                        <span class="font-semibold text-gray-600 block mb-1">Descrição:</span>
+                                        <p class="text-gray-700 text-xs">${record.descricaoAvaria}</p>
+                                    </div>
+                                ` : ''}
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+
+        // ============================================
+        // RENDERIZAÇÃO - FORMULÁRIO PRINCIPAL
+        // ============================================
+        function renderForm() {
+            const filteredPlates = getFilteredPlates();
+            const availableFailures = state.tipoEquipamento ? FAILURES_BY_TYPE[state.tipoEquipamento] || [] : [];
+
+            return `
+                <div class="space-y-6">
+                    <!-- CARD 1: EQUIPAMENTO -->
+                    <div class="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+                        <h3 class="font-bold text-[#1F4E78] mb-4 flex items-center gap-2 border-b pb-2">
+                            <i class="ph ph-truck text-xl"></i> Equipamento
+                        </h3>
+                        
+                        <div class="mb-4">
+                            <label class="text-sm font-semibold text-gray-700 uppercase tracking-wide block mb-1">Buscar Placa</label>
+                            <div class="relative">
+                                <input 
+                                    type="text"
+                                    class="w-full border border-gray-300 rounded-lg p-3 pl-10"
+                                    placeholder="Digite para filtrar..."
+                                    value="${state.searchTerm}"
+                                    oninput="state.searchTerm = this.value; render()"
+                                />
+                                <i class="ph ph-magnifying-glass absolute left-3 top-3.5 text-gray-400 text-lg"></i>
+                            </div>
+                        </div>
+
+                        <div class="flex flex-col gap-1 mb-4">
+                            <label class="text-sm font-semibold text-gray-700 uppercase tracking-wide">Selecionar Placa</label>
+                            <select 
+                                class="w-full border border-gray-300 bg-white rounded-lg p-3 text-lg font-bold text-gray-900 focus:ring-2 focus:ring-[#1F4E78]"
+                                value="${state.placa}"
+                                onchange="handlePlacaChange(this.value)"
+                            >
+                                <option value="" disabled>Selecione a placa...</option>
+                                ${filteredPlates.map(p => `
+                                    <option value="${p}" ${state.placa === p ? 'selected' : ''}>${p} - ${FLEET_DATA[p]}</option>
+                                `).join('')}
+                            </select>
+                        </div>
+
+                        ${state.tipoEquipamento ? `
+                            <div class="bg-blue-50 p-3 rounded-lg border border-blue-100 text-blue-800 text-sm font-medium flex items-center gap-2">
+                                <i class="ph ph-info"></i>
+                                ${state.tipoEquipamento}
+                            </div>
+                        ` : ''}
+                    </div>
+
+                    <!-- CARD 2: DETALHES -->
+                    <div class="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+                        <h3 class="font-bold text-[#1F4E78] mb-4 flex items-center gap-2 border-b pb-2">
+                            <i class="ph ph-clipboard-text text-xl"></i> Detalhes
+                        </h3>
+
+                        <div class="mb-4">
+                            <label class="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-1 block">Tipo de Manutenção</label>
+                            <select
+                                class="w-full border border-gray-300 bg-white rounded-lg p-3 focus:ring-2 focus:ring-[#1F4E78]"
+                                value="${state.tipoManutencao}"
+                                onchange="state.tipoManutencao = this.value; render()"
+                            >
+                                <option value="" disabled>Selecione...</option>
+                                ${MAINTENANCE_TYPES.map(type => `
+                                    <option value="${type}" ${state.tipoManutencao === type ? 'selected' : ''}>${type}</option>
+                                `).join('')}
+                            </select>
+                        </div>
+
+                        <div class="mb-4">
+                            <label class="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-2 block">Prioridade</label>
+                            <div class="grid grid-cols-2 gap-2">
+                                ${PRIORITIES.map(p => `
+                                    <button
+                                        type="button"
+                                        onclick="state.prioridade = '${p}'; render()"
+                                        class="py-3 rounded-lg font-bold text-sm border-2 transition-all ${
+                                            state.prioridade === p 
+                                                ? getPriorityColor(p) + ' scale-95 shadow-inner' 
+                                                : 'bg-gray-50 text-gray-500 border-transparent hover:bg-gray-100'
+                                        }"
+                                    >
+                                        ${p}
+                                    </button>
+                                `).join('')}
+                            </div>
+                        </div>
+
+                        ${state.tipoEquipamento ? `
+                            <div class="mb-4">
+                                <label class="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-1 block">
+                                    Avaria (${state.tipoEquipamento.split(' ')[1] || 'Geral'})
+                                </label>
+                                <select
+                                    class="w-full border border-gray-300 bg-white rounded-lg p-3 focus:ring-2 focus:ring-[#1F4E78]"
+                                    value="${state.tipoAvaria}"
+                                    onchange="state.tipoAvaria = this.value; render()"
+                                >
+                                    <option value="" disabled>Selecione...</option>
+                                    ${availableFailures.map(failure => `
+                                        <option value="${failure}" ${state.tipoAvaria === failure ? 'selected' : ''}>${failure}</option>
+                                    `).join('')}
+                                </select>
+                            </div>
+                        ` : ''}
+
+                        <div class="mb-4">
+                            <label class="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-1 block">Descrição Detalhada</label>
+                            <textarea
+                                class="w-full border border-gray-300 rounded-lg p-3 focus:ring-2 focus:ring-[#1F4E78] resize-none"
+                                placeholder="Descreva o problema, ruídos, vazamentos..."
+                                rows="4"
+                                oninput="state.descricao = this.value"
+                            >${state.descricao}</textarea>
+                        </div>
+
+                        <div class="mb-4">
+                            <label class="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-1 block">Foto da Avaria (Opcional)</label>
+                            <label class="flex flex-col items-center justify-center w-full h-32 border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100">
+                                <div class="flex flex-col items-center justify-center pt-5 pb-6">
+                                    <i class="ph ph-camera text-3xl text-gray-400 mb-2"></i>
+                                    <p class="text-xs text-gray-500">Toque para capturar</p>
+                                </div>
+                                <input type="file" class="hidden" accept="image/*" capture="environment" />
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- CARD 3: EXECUÇÃO -->
+                    <div class="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+                        <h3 class="font-bold text-[#1F4E78] mb-4 flex items-center gap-2 border-b pb-2">
+                            <i class="ph ph-map-pin text-xl"></i> Local & Execução
+                        </h3>
+
+                        <div class="relative mb-4">
+                            <div class="mb-4">
+                                <label class="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-1 block">Local da Manutenção</label>
+                                <input
+                                    type="text"
+                                    class="w-full border border-gray-300 rounded-lg p-3 pr-12 focus:ring-2 focus:ring-[#1F4E78] focus:border-transparent"
+                                    placeholder="Ex: Base, Cliente X, Rodovia Y"
+                                    value="${state.local}"
+                                    oninput="state.local = this.value"
+                                />
+                            </div>
+                            <button 
+                                onclick="handleGetLocation()"
+                                class="absolute right-2 top-8 p-2 text-[#1F4E78]"
+                                title="Usar GPS"
+                            >
+                                <i class="ph ph-crosshair text-2xl"></i>
+                            </button>
+                        </div>
+
+                        <div class="mb-4">
+                            <label class="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-1 block">Oficina / Destino</label>
+                            <select
+                                class="w-full border border-gray-300 bg-white rounded-lg p-3 focus:ring-2 focus:ring-[#1F4E78]"
+                                value="${state.oficina}"
+                                onchange="state.oficina = this.value; render()"
+                            >
+                                <option value="" disabled>Selecione...</option>
+                                ${WORKSHOPS.map(workshop => `
+                                    <option value="${workshop}" ${state.oficina === workshop ? 'selected' : ''}>${workshop}</option>
+                                `).join('')}
+                            </select>
+                        </div>
+
+                        <div class="mb-4">
+                            <label class="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-1 block">Responsável (Mecânico)</label>
+                            <input
+                                type="text"
+                                class="w-full border border-gray-300 rounded-lg p-3 focus:ring-2 focus:ring-[#1F4E78] focus:border-transparent"
+                                value="${state.responsavel}"
+                                oninput="state.responsavel = this.value"
+                            />
+                        </div>
+
+                        <div class="mb-4">
+                            <label class="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-1 block">Observações Extras</label>
+                            <textarea
+                                class="w-full border border-gray-300 rounded-lg p-3 focus:ring-2 focus:ring-[#1F4E78] resize-none"
+                                rows="3"
+                                oninput="state.observacoes = this.value"
+                            >${state.observacoes}</textarea>
+                        </div>
+                    </div>
+
+                    <!-- ACTION BUTTON -->
+                    <button
+                        onclick="handleSubmit()"
+                        ${state.isLoading ? 'disabled' : ''}
+                        class="w-full py-4 rounded-xl text-white font-bold text-lg shadow-xl mb-8 flex justify-center items-center gap-2 transition-all ${
+                            state.isLoading ? 'bg-gray-400 cursor-not-allowed' : 'bg-[#1F4E78] hover:bg-[#163a5c] active:scale-95'
+                        }"
+                    >
+                        ${state.isLoading ? `
+                            <i class="ph ph-spinner animate-spin text-2xl"></i>
+                            ENVIANDO...
+                        ` : `
+                            ABRIR ORDEM DE MANUTENÇÃO
+                            <i class="ph ph-paper-plane-right text-xl"></i>
+                        `}
+                    </button>
+                </div>
+            `;
+        }
+
+        // ============================================
+        // RENDERIZAÇÃO PRINCIPAL
+        // ============================================
+        function render() {
+            const app = document.getElementById('app');
+            
+            if (state.view === 'login') {
+                app.innerHTML = renderLogin();
+            } else if (state.view === 'success') {
+                app.innerHTML = renderSuccess();
+            } else {
+                // Header + Content
+                const isHistory = state.view === 'history';
+                app.innerHTML = `
+                    <div class="min-h-screen bg-[#F5F5F5] pb-10">
+                        <header class="bg-[#1F4E78] text-white p-4 sticky top-0 z-10 shadow-md flex justify-between items-center">
+                            <div>
+                                <h1 class="font-bold text-lg">${isHistory ? 'Histórico' : 'Nova Manutenção'}</h1>
+                                <p class="text-xs opacity-80">Supervisor: ${state.supervisor}</p>
+                            </div>
+                            <div class="flex gap-3">
+                                <button onclick="state.view='${isHistory ? 'form' : 'history'}'; render()" class="p-2 rounded-full hover:bg-white/10">
+                                    <i class="ph ${isHistory ? 'ph-plus' : 'ph-clock-counter-clockwise'} text-2xl"></i>
+                                </button>
+                                <button onclick="handleLogout()" class="p-2 rounded-full hover:bg-white/10">
+                                    <i class="ph ph-sign-out text-2xl"></i>
+                                </button>
+                            </div>
+                        </header>
+
+                        <main class="p-4 max-w-lg mx-auto">
+                            ${isHistory ? renderHistory() : renderForm()}
+                        </main>
+                    </div>
+                `;
+            }
+        }
+
+        // ============================================
+        // INICIALIZAÇÃO
+        // ============================================
+        document.addEventListener('DOMContentLoaded', () => {
+            // Verificar se já tem supervisor logado
+            const savedSupervisor = localStorage.getItem('supervisor_name');
+            if (savedSupervisor) {
+                state.supervisor = savedSupervisor;
+                state.view = 'form';
+            }
+            
+            render();
+        });
+    </script>
+</body>
+</html>
