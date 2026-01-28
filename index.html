@@ -9,16 +9,26 @@
     <!-- Phosphor Icons -->
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
     
-    <!-- Tailwind CSS -->
+    <!-- Tailwind CSS (Versão Play CDN mais estável para protótipos) -->
     <script src="https://cdn.tailwindcss.com"></script>
     
     <style>
-        body { -webkit-tap-highlight-color: transparent; overscroll-behavior-y: none; }
+        body {
+            -webkit-tap-highlight-color: transparent;
+            overscroll-behavior-y: none;
+        }
+        
+        .animate-bounce { animation: bounce 1s infinite; }
+        @keyframes bounce {
+            0%, 100% { transform: translateY(-25%); animation-timing-function: cubic-bezier(0.8, 0, 1, 1); }
+            50% { transform: translateY(0); animation-timing-function: cubic-bezier(0, 0, 0.2, 1); }
+        }
+        
         .animate-spin { animation: spin 1s linear infinite; }
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-        /* Esconde barra de rolagem mas permite scroll */
-        .no-scrollbar::-webkit-scrollbar { display: none; }
-        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+        .pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
     </style>
 </head>
 <body class="bg-gray-100 font-sans">
@@ -28,14 +38,15 @@
         // ============================================
         // CONFIGURAÇÃO
         // ============================================
-        // ⚠️ Substitua pela sua URL de implantação (Web App -> Anyone)
-        const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzW3BhAlswdZc5HPET2xL_dGe0JX2-A2UEuOc5zgrEZMgd7te-rfsucLf3_i0P-H6EvDQ/exec'; 
+        // ⚠️ IMPORTANTE: Substitua pela URL da NOVA IMPLANTAÇÃO ("Anyone")
+        const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyJsoTRPS-bxyFnFFd-BbgMZkjQb3TONnoQqSX84l7dpu0WnL9tu6B4IgMXK6iWAwLb0g/exec'; 
         
         const SYNC_INTERVAL = 30000;
         let syncIntervalId = null;
+        let lastSyncTime = null;
 
         // ============================================
-        // DADOS
+        // DADOS DA FROTA
         // ============================================
         const FLEET_DATA = {
             "CZC-0453": "CAMINHÃO ALTA PRESSÃO", "DSY6472": "CAMINHÃO ALTA PRESSÃO",
@@ -62,10 +73,7 @@
         };
 
         const MAINTENANCE_TYPES = ["Preventiva", "Corretiva", "Preditiva", "Emergencial", "Outro"];
-        
-        // NOVAS OPÇÕES DE OFICINA
-        const WORKSHOPS = ["SERVITEC", "PARANA MOLAS", "BORRACHARIA", "Outro"];
-        
+        const WORKSHOPS = ["Oficina Interna", "Oficina Externa - A definir", "Mecânica Diesel", "Especializada Bomba", "Especializada Hidráulica", "Concessionária", "Em Campo (Emergencial)", "Outro"];
         const FAILURES_BY_TYPE = {
             "CAMINHÃO ALTA PRESSÃO": ["Bomba Alta Pressão", "Mangueira Alta Pressão", "Bico Rotativo", "Motor Bomba", "Sistema Hidráulico", "Válvulas de Pressão", "Filtros Bomba", "Tanque de Água", "Motor do Caminhão", "Transmissão", "Freios", "Suspensão", "Sistema Elétrico", "Pneus", "Outro"],
             "CAMINHÃO AUTO VÁCUO": ["Bomba de Vácuo", "Tanque de Sucção", "Mangueira de Sucção", "Sistema de Descarga", "Válvulas de Vácuo", "Filtros", "Sistema Hidráulico", "Motor do Caminhão", "Transmissão", "Freios", "Suspensão", "Sistema Elétrico", "Pneus", "Outro"],
@@ -73,83 +81,113 @@
             "CAMINHÃO BROOK": ["Sistema de Desobstrução", "Lança/Braço Mecânico", "Mangueiras", "Sistema Hidráulico", "Cabos de Aço", "Filtros", "Motor do Caminhão", "Transmissão", "Freios", "Suspensão", "Sistema Elétrico", "Pneus", "Outro"],
             "ASPIRADOR": ["Motor de Sucção", "Filtros", "Mangueiras", "Sistema Elétrico", "Tanque", "Outro"]
         };
+        const PRIORITIES = ["URGENTE", "ALTA", "MEDIA", "BAIXA"];
+        const STATUS_OPTIONS = ["Aberta", "Em Andamento", "Aguardando Peças", "Concluída", "Cancelada"];
 
         // ============================================
-        // ESTADO
+        // ESTADO DA APLICAÇÃO
         // ============================================
         let state = {
             view: 'login',
             supervisor: '',
             editingId: null,
             closingId: null,
-            // Campos do Formulário
             placa: '',
             tipoEquipamento: '',
             tipoManutencao: '',
             tipoManutencaoCustom: '',
+            prioridade: '',
             tipoAvaria: '',
             tipoAvariaCustom: '',
             descricao: '',
+            local: '',
             oficina: '',
             oficinaCustom: '',
             responsavel: '',
             observacoes: '',
-            dataHoraAvaria: '',
-            // Campos de Fechamento
-            dataHoraFechamento: '',
-            statusFechamento: '', // Aprovada ou Rejeitada
-            // Controle
             statusOrdem: 'Aberta',
+            dataHoraAvaria: '',
+            dataHoraFechamento: '',
             searchTerm: '',
             isLoading: false,
             isSyncing: false,
+            historyFilter: 'all',
             showCustomManutencao: false,
             showCustomOficina: false,
             showCustomAvaria: false
         };
 
         // ============================================
-        // SERVIÇOS
+        // INTEGRAÇÃO GOOGLE SHEETS (CORRIGIDA)
         // ============================================
+        
         async function submitToSheet(record) {
             try {
+                // CORREÇÃO CRÍTICA: Não usar 'Content-Type': 'application/json'
+                // O Google Scripts lida melhor com text/plain para evitar Preflight CORS
                 const response = await fetch(GOOGLE_SCRIPT_URL, {
                     method: 'POST',
-                    redirect: 'follow',
-                    body: JSON.stringify(record)
+                    redirect: 'follow', // Seguir redirecionamentos do Google
+                    body: JSON.stringify(record) // Envia como string pura
                 });
+                
                 const data = await response.json();
-                return { success: data.success, message: data.error };
+                
+                if (data.success) {
+                    console.log('Sucesso ao enviar:', data);
+                    return { success: true };
+                } else {
+                    throw new Error(data.error || 'Erro desconhecido no servidor');
+                }
             } catch (error) {
-                console.error('Erro rede:', error);
+                console.error('Erro ao enviar para Google Sheets:', error);
                 return { success: false, message: error.message };
             }
         }
 
         async function fetchFromSheet() {
             try {
-                const response = await fetch(GOOGLE_SCRIPT_URL, { method: 'GET', redirect: 'follow' });
+                const response = await fetch(GOOGLE_SCRIPT_URL, {
+                    method: 'GET',
+                    redirect: 'follow'
+                });
+                
                 const data = await response.json();
+                
                 if (data.success && data.records) {
+                    // Atualiza apenas se houver sucesso
                     localStorage.setItem('maintenance_history', JSON.stringify(data.records));
+                    lastSyncTime = new Date();
                     return true;
                 }
                 return false;
-            } catch (error) { return false; }
+            } catch (error) {
+                console.error('Erro ao buscar do Google Sheets:', error);
+                return false;
+            }
         }
 
         async function syncWithSheet() {
             if (state.isSyncing) return;
+            
             state.isSyncing = true;
-            render(); 
-
+            render(); // Atualiza UI para mostrar spinner
+            
+            // 1. Enviar pendentes
             const history = getMaintenanceHistory();
             const pending = history.filter(r => r.status === 'pending');
             
-            for (const record of pending) {
-                const result = await submitToSheet(record);
-                if (result.success) updateHistoryStatus(record.id, 'synced');
+            if (pending.length > 0) {
+                console.log(`Enviando ${pending.length} registros pendentes...`);
+                for (const record of pending) {
+                    const result = await submitToSheet(record);
+                    if (result.success) {
+                        updateHistoryStatus(record.id, 'synced');
+                    }
+                }
             }
+
+            // 2. Buscar atualizações
             await fetchFromSheet();
             
             state.isSyncing = false;
@@ -157,45 +195,56 @@
         }
 
         // ============================================
-        // UTILITÁRIOS & STORAGE
+        // FUNÇÕES DE UTILIDADE
         // ============================================
         function getMaintenanceHistory() {
-            return JSON.parse(localStorage.getItem('maintenance_history') || '[]');
+            const history = localStorage.getItem('maintenance_history');
+            return history ? JSON.parse(history) : [];
         }
 
         function saveToHistory(record) {
             const history = getMaintenanceHistory();
-            const idx = history.findIndex(r => r.id === record.id);
-            if (idx !== -1) history[idx] = record;
-            else history.unshift(record);
+            const existingIndex = history.findIndex(r => r.id === record.id);
+            if (existingIndex !== -1) {
+                history[existingIndex] = record;
+            } else {
+                history.unshift(record);
+            }
             localStorage.setItem('maintenance_history', JSON.stringify(history));
         }
 
         function updateHistoryStatus(id, status) {
             const history = getMaintenanceHistory();
-            const item = history.find(r => r.id === id);
-            if (item) {
-                item.status = status;
+            const index = history.findIndex(r => r.id === id);
+            if (index !== -1) {
+                history[index].status = status;
                 localStorage.setItem('maintenance_history', JSON.stringify(history));
             }
         }
 
         function formatDateTimeLocal(isoString) {
             if (!isoString) return '';
+            // Tenta converter ISO string para formato datetime-local (YYYY-MM-DDThh:mm)
             const date = new Date(isoString);
             if (isNaN(date.getTime())) return '';
+            
+            // Ajuste fuso horário manual para input local
             const offsetMs = date.getTimezoneOffset() * 60 * 1000;
-            return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
+            const msLocal = date.getTime() - offsetMs;
+            const dateLocal = new Date(msLocal);
+            const iso = dateLocal.toISOString();
+            return iso.slice(0, 16);
         }
 
         function formatDate(isoDate) {
             if (!isoDate) return '-';
             const date = new Date(isoDate);
-            return isNaN(date.getTime()) ? isoDate : date.toLocaleString('pt-BR');
+            if (isNaN(date.getTime())) return isoDate;
+            return date.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
         }
 
         // ============================================
-        // LOGICA DE NEGÓCIO
+        // HANDLERS
         // ============================================
         function handleLogin(e) {
             e.preventDefault();
@@ -207,26 +256,19 @@
         }
 
         function handleLogout() {
-            if (syncIntervalId) clearInterval(syncIntervalId);
+            stopAutoSync();
             localStorage.removeItem('supervisor_name');
             state.supervisor = '';
             state.view = 'login';
             render();
         }
 
-        function startAutoSync() {
-            if (syncIntervalId) clearInterval(syncIntervalId);
-            syncIntervalId = setInterval(syncWithSheet, SYNC_INTERVAL);
-            syncWithSheet();
-        }
-
         async function handleSubmit() {
-            const { placa, tipoManutencao, tipoManutencaoCustom, tipoAvaria, tipoAvariaCustom, 
-                    descricao, oficina, oficinaCustom, responsavel, dataHoraAvaria } = state;
+            const { placa, tipoManutencao, tipoManutencaoCustom, prioridade, tipoAvaria, 
+                    tipoAvariaCustom, descricao, local, oficina, oficinaCustom, responsavel, dataHoraAvaria } = state;
             
-            // Validação simplificada (sem Prioridade e Local)
-            if (!placa || !descricao || !responsavel || !dataHoraAvaria) {
-                alert("Preencha campos com *");
+            if (!placa || !prioridade || !descricao || !local || !responsavel || !dataHoraAvaria) {
+                alert("Por favor, preencha todos os campos obrigatórios marcados com *");
                 return;
             }
 
@@ -235,37 +277,50 @@
             const finalAvaria = tipoAvaria === 'Outro' ? tipoAvariaCustom.trim() : tipoAvaria;
 
             if (!finalManutencao || !finalOficina || !finalAvaria) {
-                alert("Preencha os campos 'Outro' corretamente.");
+                alert("Por favor, preencha todos os campos customizados.");
                 return;
             }
 
             state.isLoading = true;
             render();
 
-            const record = {
-                id: state.editingId || `ORD-${Date.now()}`,
-                dataHoraAbertura: state.editingId ? state.dataHoraAbertura : new Date().toISOString(),
-                dataHoraAvaria: new Date(dataHoraAvaria).toISOString(),
+            const recordId = state.editingId || `ORD-${Date.now()}`;
+            const now = new Date().toISOString();
+
+            const newRecord = {
+                id: recordId,
+                dataHoraAbertura: state.editingId ? state.dataHoraAbertura : now,
+                dataHoraAvaria: new Date(state.dataHoraAvaria).toISOString(),
                 dataHoraFechamento: state.dataHoraFechamento ? new Date(state.dataHoraFechamento).toISOString() : null,
                 supervisor: state.supervisor,
-                placa,
+                placa: state.placa,
                 tipoEquipamento: state.tipoEquipamento,
                 tipoManutencao: finalManutencao,
+                prioridade: state.prioridade,
                 tipoAvaria: finalAvaria,
-                descricaoAvaria: descricao.trim(),
+                descricaoAvaria: state.descricao.trim(),
+                localManutencao: state.local.trim(),
                 oficina: finalOficina,
-                responsavelManutencao: responsavel.trim(),
+                responsavelManutencao: state.responsavel.trim(),
                 observacoes: state.observacoes.trim(),
                 statusOrdem: state.statusOrdem,
-                status: 'pending'
+                status: 'pending' // Inicialmente pendente
             };
 
-            saveToHistory(record);
-            const result = await submitToSheet(record);
+            // 1. Salva localmente primeiro
+            saveToHistory(newRecord);
+
+            // 2. Tenta enviar
+            const result = await submitToSheet(newRecord);
 
             state.isLoading = false;
-            if (result.success) updateHistoryStatus(record.id, 'synced');
-            
+
+            if (result.success) {
+                updateHistoryStatus(newRecord.id, 'synced');
+            } else {
+                alert("Salvo localmente. Será sincronizado quando houver conexão.");
+            }
+
             state.view = 'success';
             state.editingId = null;
             render();
@@ -274,10 +329,6 @@
         async function handleCloseOrder() {
             if (!state.dataHoraFechamento) {
                 alert('Informe a data/hora de retorno.');
-                return;
-            }
-            if (!state.statusFechamento) {
-                alert('Selecione se a manutenção foi Aprovada ou Rejeitada.');
                 return;
             }
 
@@ -289,65 +340,83 @@
 
             if (record) {
                 record.dataHoraFechamento = new Date(state.dataHoraFechamento).toISOString();
-                // Aqui define o status final
-                record.statusOrdem = `Manutenção ${state.statusFechamento}`;
+                record.statusOrdem = 'Concluída';
                 record.status = 'pending';
                 
                 saveToHistory(record);
                 const result = await submitToSheet(record);
-                if (result.success) updateHistoryStatus(record.id, 'synced');
+                
+                if (result.success) {
+                    updateHistoryStatus(record.id, 'synced');
+                }
             }
 
             state.isLoading = false;
             state.closingId = null;
-            state.statusFechamento = '';
+            state.dataHoraFechamento = '';
             state.view = 'success';
             render();
         }
 
-        // ============================================
-        // CARREGAMENTO DE DADOS
-        // ============================================
-        function loadRecordForEdit(id) {
-            const r = getMaintenanceHistory().find(x => x.id === id);
-            if (!r) return;
+        function startAutoSync() {
+            if (syncIntervalId) clearInterval(syncIntervalId);
+            syncIntervalId = setInterval(() => {
+                syncWithSheet();
+            }, SYNC_INTERVAL);
+            // Executa um sync inicial
+            syncWithSheet();
+        }
 
-            state.editingId = r.id;
-            state.placa = r.placa;
-            state.tipoEquipamento = r.tipoEquipamento;
-            state.dataHoraAbertura = r.dataHoraAbertura;
-            state.dataHoraAvaria = formatDateTimeLocal(r.dataHoraAvaria);
-            state.descricao = r.descricaoAvaria;
-            state.responsavel = r.responsavelManutencao;
-            state.observacoes = r.observacoes || '';
-            state.statusOrdem = r.statusOrdem;
+        function stopAutoSync() {
+            if (syncIntervalId) clearInterval(syncIntervalId);
+        }
 
-            // Lógica Inputs Custom
-            if (MAINTENANCE_TYPES.includes(r.tipoManutencao)) {
-                state.tipoManutencao = r.tipoManutencao;
+        // ============================================
+        // FUNÇÕES DE CARREGAMENTO (EDIT/CLOSE)
+        // ============================================
+        function loadRecordForEdit(recordId) {
+            const history = getMaintenanceHistory();
+            const record = history.find(r => r.id === recordId);
+            if (!record) return;
+
+            state.editingId = record.id;
+            state.placa = record.placa;
+            state.tipoEquipamento = record.tipoEquipamento;
+            state.dataHoraAbertura = record.dataHoraAbertura;
+            state.dataHoraAvaria = formatDateTimeLocal(record.dataHoraAvaria);
+            state.prioridade = record.prioridade;
+            state.descricao = record.descricaoAvaria;
+            state.local = record.localManutencao;
+            state.responsavel = record.responsavelManutencao;
+            state.observacoes = record.observacoes || '';
+            state.statusOrdem = record.statusOrdem || 'Aberta';
+
+            // Logica para campos Custom
+            if (MAINTENANCE_TYPES.includes(record.tipoManutencao)) {
+                state.tipoManutencao = record.tipoManutencao;
                 state.showCustomManutencao = false;
             } else {
                 state.tipoManutencao = 'Outro';
-                state.tipoManutencaoCustom = r.tipoManutencao;
+                state.tipoManutencaoCustom = record.tipoManutencao;
                 state.showCustomManutencao = true;
             }
 
-            if (WORKSHOPS.includes(r.oficina)) {
-                state.oficina = r.oficina;
+            if (WORKSHOPS.includes(record.oficina)) {
+                state.oficina = record.oficina;
                 state.showCustomOficina = false;
             } else {
                 state.oficina = 'Outro';
-                state.oficinaCustom = r.oficina;
+                state.oficinaCustom = record.oficina;
                 state.showCustomOficina = true;
             }
 
-            const failures = FAILURES_BY_TYPE[r.tipoEquipamento] || [];
-            if (failures.includes(r.tipoAvaria)) {
-                state.tipoAvaria = r.tipoAvaria;
+            const failures = FAILURES_BY_TYPE[record.tipoEquipamento] || [];
+            if (failures.includes(record.tipoAvaria)) {
+                state.tipoAvaria = record.tipoAvaria;
                 state.showCustomAvaria = false;
             } else {
                 state.tipoAvaria = 'Outro';
-                state.tipoAvariaCustom = r.tipoAvaria;
+                state.tipoAvariaCustom = record.tipoAvaria;
                 state.showCustomAvaria = true;
             }
 
@@ -355,48 +424,57 @@
             render();
         }
 
+        function loadRecordForClose(recordId) {
+            state.closingId = recordId;
+            // Define data atual como padrão
+            const now = new Date();
+            now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+            state.dataHoraFechamento = now.toISOString().slice(0, 16);
+            state.view = 'close';
+            render();
+        }
+
         // ============================================
-        // RENDERIZAÇÃO
+        // RENDERERS (Simplificado para brevidade, mantendo lógica original)
         // ============================================
         function render() {
             const app = document.getElementById('app');
-            let content = '';
-            let title = '';
-
-            switch (state.view) {
-                case 'login': return app.innerHTML = renderLogin();
-                case 'success': return app.innerHTML = renderSuccess();
-                case 'close': 
-                    content = renderCloseOrder();
-                    title = 'Fechar Ordem';
-                    break;
-                case 'history':
-                    content = renderHistory();
-                    title = 'Histórico';
-                    break;
-                default: // form
-                    content = renderForm();
-                    title = state.editingId ? 'Editar Ordem' : 'Nova Manutenção';
-            }
             
-            app.innerHTML = `
+            if (state.view === 'login') {
+                app.innerHTML = renderLogin();
+            } else if (state.view === 'success') {
+                app.innerHTML = renderSuccess();
+            } else if (state.view === 'close') {
+                app.innerHTML = renderLayout(renderCloseOrder(), 'Fechar Ordem');
+            } else if (state.view === 'history') {
+                app.innerHTML = renderLayout(renderHistory(), 'Histórico');
+            } else {
+                app.innerHTML = renderLayout(renderForm(), state.editingId ? 'Editar Ordem' : 'Nova Manutenção');
+            }
+        }
+
+        function renderLayout(content, title) {
+            const isHistory = state.view === 'history';
+            return `
                 <div class="min-h-screen bg-[#F5F5F5] pb-10">
-                    <header class="bg-[#1F4E78] text-white p-4 sticky top-0 z-30 shadow-md flex justify-between items-center">
+                    <header class="bg-[#1F4E78] text-white p-4 sticky top-0 z-20 shadow-md flex justify-between items-center">
                         <div>
                             <h1 class="font-bold text-lg">${title}</h1>
-                            <p class="text-xs opacity-80 uppercase">${state.supervisor}</p>
+                            <p class="text-xs opacity-80">Supervisor: ${state.supervisor}</p>
                         </div>
                         <div class="flex gap-3 items-center">
                             ${state.isSyncing ? '<i class="ph ph-spinner animate-spin text-xl"></i>' : ''}
-                            <button onclick="state.view='${state.view === 'history' ? 'form' : 'history'}'; render()" class="p-2 rounded-full hover:bg-white/10">
-                                <i class="ph ${state.view === 'history' ? 'ph-plus' : 'ph-clock-counter-clockwise'} text-2xl"></i>
+                            <button onclick="state.view='${isHistory ? 'form' : 'history'}'; render()" class="p-2 rounded-full hover:bg-white/10">
+                                <i class="ph ${isHistory ? 'ph-plus' : 'ph-clock-counter-clockwise'} text-2xl"></i>
                             </button>
                             <button onclick="handleLogout()" class="p-2 rounded-full hover:bg-white/10">
                                 <i class="ph ph-sign-out text-2xl"></i>
                             </button>
                         </div>
                     </header>
-                    <main class="p-4 max-w-lg mx-auto">${content}</main>
+                    <main class="p-4 max-w-lg mx-auto">
+                        ${content}
+                    </main>
                 </div>
             `;
         }
@@ -405,15 +483,20 @@
             return `
                 <div class="min-h-screen flex flex-col justify-center items-center p-6 bg-[#1F4E78]">
                     <div class="bg-white p-8 rounded-2xl w-full max-w-sm shadow-2xl">
-                        <div class="flex justify-center mb-6 text-[#1F4E78]"><i class="ph ph-wrench text-6xl"></i></div>
+                        <div class="flex justify-center mb-6 text-[#1F4E78]">
+                            <i class="ph ph-wrench text-6xl"></i>
+                        </div>
                         <h1 class="text-2xl font-bold text-center text-gray-800 mb-8">Manutenção Frota</h1>
                         <form onsubmit="handleLogin(event)">
                             <div class="mb-6">
                                 <label class="text-sm font-bold text-gray-700 block mb-2">NOME DO SUPERVISOR</label>
-                                <input type="text" class="w-full border-2 border-gray-300 rounded-lg p-3 focus:border-[#1F4E78] outline-none"
-                                    value="${state.supervisor}" oninput="state.supervisor = this.value" required placeholder="Digite seu nome">
+                                <input type="text" class="w-full border-2 border-gray-300 rounded-lg p-3 focus:border-[#1F4E78] outline-none transition-colors"
+                                    placeholder="Ex: João Silva" value="${state.supervisor}"
+                                    oninput="state.supervisor = this.value" required />
                             </div>
-                            <button type="submit" class="w-full bg-[#70AD47] text-white font-bold py-4 rounded-xl shadow-lg">ENTRAR</button>
+                            <button type="submit" class="w-full bg-[#70AD47] text-white font-bold py-4 rounded-xl shadow-lg hover:bg-[#5f963b] transition-colors">
+                                ENTRAR NO SISTEMA
+                            </button>
                         </form>
                     </div>
                 </div>
@@ -421,52 +504,28 @@
         }
 
         function renderForm() {
-            // Lógica de Filtro Inteligente da Placa
-            const allPlates = Object.keys(FLEET_DATA);
-            const filteredPlates = state.searchTerm 
-                ? allPlates.filter(p => p.toLowerCase().includes(state.searchTerm.toLowerCase()))
-                : allPlates;
-            
+            const filteredPlates = Object.keys(FLEET_DATA).filter(p => p.toLowerCase().includes(state.searchTerm.toLowerCase()));
             const failures = state.tipoEquipamento ? FAILURES_BY_TYPE[state.tipoEquipamento] || [] : [];
-
+            
             return `
                 <div class="space-y-6">
-                    <!-- PLACA INTELIGENTE -->
+                    <!-- PLACA -->
                     <div class="bg-white p-5 rounded-2xl shadow-sm">
                         <h3 class="font-bold text-[#1F4E78] mb-4 border-b pb-2 flex items-center gap-2">
                             <i class="ph ph-truck text-xl"></i> Equipamento
                         </h3>
-                        
-                        <div class="mb-2">
-                            <label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Filtrar Placa</label>
-                            <div class="relative">
-                                <i class="ph ph-magnifying-glass absolute left-3 top-3.5 text-gray-400"></i>
-                                <input type="text" class="w-full border border-gray-300 rounded-lg p-3 pl-10"
-                                    placeholder="Digite número ou letras..." 
-                                    value="${state.searchTerm}"
-                                    oninput="state.searchTerm = this.value; render()"> <!-- Re-renderiza ao digitar -->
-                            </div>
+                        <div class="mb-4 relative">
+                            <i class="ph ph-magnifying-glass absolute left-3 top-3.5 text-gray-400"></i>
+                            <input type="text" class="w-full border border-gray-300 rounded-lg p-3 pl-10"
+                                placeholder="Buscar placa..." value="${state.searchTerm}"
+                                oninput="state.searchTerm = this.value; render()">
                         </div>
-
-                        <div class="mb-4">
-                            <label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Selecionar Veículo *</label>
-                            <select class="w-full border-2 border-gray-200 rounded-lg p-3 font-bold text-gray-800 focus:border-[#1F4E78]"
-                                onchange="state.placa = this.value; state.tipoEquipamento = FLEET_DATA[this.value]; state.tipoAvaria=''; state.searchTerm=''; render()">
-                                <option value="" disabled ${!state.placa ? 'selected' : ''}>
-                                    ${filteredPlates.length === 0 ? 'Nenhuma placa encontrada' : 'Selecione na lista abaixo...'}
-                                </option>
-                                ${filteredPlates.map(p => `
-                                    <option value="${p}" ${state.placa === p ? 'selected' : ''}>${p} - ${FLEET_DATA[p]}</option>
-                                `).join('')}
-                            </select>
-                        </div>
-                        
-                        ${state.tipoEquipamento ? `
-                            <div class="mt-2 text-sm text-blue-800 bg-blue-50 p-3 rounded-lg flex items-center gap-2 border border-blue-100">
-                                <i class="ph ph-info text-lg"></i>
-                                <span class="font-semibold">${state.tipoEquipamento}</span>
-                            </div>
-                        ` : ''}
+                        <select class="w-full border border-gray-300 rounded-lg p-3 font-bold text-gray-800"
+                            onchange="state.placa = this.value; state.tipoEquipamento = FLEET_DATA[this.value]; state.tipoAvaria=''; render()">
+                            <option value="" disabled ${!state.placa ? 'selected' : ''}>Selecione a Placa</option>
+                            ${filteredPlates.map(p => `<option value="${p}" ${state.placa === p ? 'selected' : ''}>${p} - ${FLEET_DATA[p]}</option>`).join('')}
+                        </select>
+                        ${state.tipoEquipamento ? `<div class="mt-2 text-sm text-blue-600 bg-blue-50 p-2 rounded"><i class="ph ph-info"></i> ${state.tipoEquipamento}</div>` : ''}
                     </div>
 
                     <!-- DETALHES -->
@@ -482,13 +541,25 @@
                         </div>
 
                         <div class="mb-4">
+                            <label class="block text-sm font-bold text-gray-700 mb-1">Prioridade *</label>
+                            <div class="grid grid-cols-2 gap-2">
+                                ${PRIORITIES.map(p => `
+                                    <button onclick="state.prioridade='${p}'; render()"
+                                        class="py-2 rounded-lg text-xs font-bold border-2 ${state.prioridade === p ? getPriorityStyle(p) : 'bg-gray-50 text-gray-500 border-transparent'}">
+                                        ${p}
+                                    </button>
+                                `).join('')}
+                            </div>
+                        </div>
+
+                        <div class="mb-4">
                             <label class="block text-sm font-bold text-gray-700 mb-1">Tipo de Manutenção *</label>
                             <select class="w-full border border-gray-300 rounded-lg p-3 bg-white"
                                 onchange="state.tipoManutencao = this.value; state.showCustomManutencao = (this.value === 'Outro'); render()">
                                 <option value="" disabled ${!state.tipoManutencao ? 'selected' : ''}>Selecione...</option>
                                 ${MAINTENANCE_TYPES.map(t => `<option value="${t}" ${state.tipoManutencao === t ? 'selected' : ''}>${t}</option>`).join('')}
                             </select>
-                            ${state.showCustomManutencao ? `<input type="text" class="mt-2 w-full border border-gray-300 rounded-lg p-3" placeholder="Especifique..." value="${state.tipoManutencaoCustom}" oninput="state.tipoManutencaoCustom = this.value">` : ''}
+                            ${state.showCustomManutencao ? `<input type="text" class="mt-2 w-full border border-gray-300 rounded-lg p-3" placeholder="Qual tipo?" value="${state.tipoManutencaoCustom}" oninput="state.tipoManutencaoCustom = this.value">` : ''}
                         </div>
 
                         ${state.tipoEquipamento ? `
@@ -499,7 +570,7 @@
                                 <option value="" disabled ${!state.tipoAvaria ? 'selected' : ''}>Selecione...</option>
                                 ${failures.map(f => `<option value="${f}" ${state.tipoAvaria === f ? 'selected' : ''}>${f}</option>`).join('')}
                             </select>
-                            ${state.showCustomAvaria ? `<input type="text" class="mt-2 w-full border border-gray-300 rounded-lg p-3" placeholder="Especifique..." value="${state.tipoAvariaCustom}" oninput="state.tipoAvariaCustom = this.value">` : ''}
+                            ${state.showCustomAvaria ? `<input type="text" class="mt-2 w-full border border-gray-300 rounded-lg p-3" placeholder="Qual avaria?" value="${state.tipoAvariaCustom}" oninput="state.tipoAvariaCustom = this.value">` : ''}
                         </div>
                         ` : ''}
 
@@ -510,20 +581,26 @@
                         </div>
                     </div>
 
-                    <!-- EXECUÇÃO -->
+                    <!-- LOCAL E RESPONSÁVEL -->
                     <div class="bg-white p-5 rounded-2xl shadow-sm">
                         <h3 class="font-bold text-[#1F4E78] mb-4 border-b pb-2 flex items-center gap-2">
-                            <i class="ph ph-wrench text-xl"></i> Execução
+                            <i class="ph ph-map-pin text-xl"></i> Execução
                         </h3>
                         
                         <div class="mb-4">
-                            <label class="block text-sm font-bold text-gray-700 mb-1">Oficina / Destino *</label>
+                            <label class="block text-sm font-bold text-gray-700 mb-1">Local onde está *</label>
+                            <input type="text" class="w-full border border-gray-300 rounded-lg p-3"
+                                placeholder="Ex: Base, Cliente..." value="${state.local}" oninput="state.local = this.value">
+                        </div>
+
+                        <div class="mb-4">
+                            <label class="block text-sm font-bold text-gray-700 mb-1">Oficina/Destino *</label>
                             <select class="w-full border border-gray-300 rounded-lg p-3 bg-white"
                                 onchange="state.oficina = this.value; state.showCustomOficina = (this.value === 'Outro'); render()">
                                 <option value="" disabled ${!state.oficina ? 'selected' : ''}>Selecione...</option>
                                 ${WORKSHOPS.map(w => `<option value="${w}" ${state.oficina === w ? 'selected' : ''}>${w}</option>`).join('')}
                             </select>
-                            ${state.showCustomOficina ? `<input type="text" class="mt-2 w-full border border-gray-300 rounded-lg p-3" placeholder="Digite o nome da oficina..." value="${state.oficinaCustom}" oninput="state.oficinaCustom = this.value">` : ''}
+                            ${state.showCustomOficina ? `<input type="text" class="mt-2 w-full border border-gray-300 rounded-lg p-3" placeholder="Nome da oficina" value="${state.oficinaCustom}" oninput="state.oficinaCustom = this.value">` : ''}
                         </div>
 
                         <div class="mb-4">
@@ -533,107 +610,45 @@
                         </div>
                     </div>
 
+                    <!-- BOTÃO AÇÃO -->
                     <button onclick="handleSubmit()" ${state.isLoading ? 'disabled' : ''}
-                        class="w-full py-4 rounded-xl text-white font-bold shadow-lg flex justify-center items-center gap-2 ${state.isLoading ? 'bg-gray-400' : 'bg-[#1F4E78] active:scale-95'}">
+                        class="w-full py-4 rounded-xl text-white font-bold shadow-lg transition-all flex justify-center items-center gap-2 ${state.isLoading ? 'bg-gray-400' : 'bg-[#1F4E78] active:scale-95'}">
                         ${state.isLoading ? '<i class="ph ph-spinner animate-spin text-2xl"></i> PROCESSANDO...' : (state.editingId ? 'ATUALIZAR ORDEM' : 'ABRIR ORDEM')}
                     </button>
                     
-                    ${state.editingId ? `<button onclick="resetForm()" class="w-full py-3 text-gray-500 font-bold">CANCELAR EDIÇÃO</button>` : ''}
-                </div>
-            `;
-        }
-
-        function renderCloseOrder() {
-            const r = getMaintenanceHistory().find(x => x.id === state.closingId);
-            if(!r) return 'Erro';
-
-            return `
-                <div class="bg-white p-6 rounded-2xl shadow-sm space-y-6">
-                    <div class="border-b pb-4">
-                        <h3 class="font-bold text-xl text-gray-800">${r.placa}</h3>
-                        <p class="text-sm text-gray-500">${r.tipoAvaria}</p>
-                    </div>
-
-                    <div>
-                        <label class="block text-sm font-bold text-gray-700 mb-2">Data/Hora de Retorno *</label>
-                        <input type="datetime-local" class="w-full border-2 border-gray-200 rounded-xl p-4 focus:border-[#1F4E78]"
-                            value="${state.dataHoraFechamento}" oninput="state.dataHoraFechamento = this.value">
-                    </div>
-
-                    <div>
-                        <label class="block text-sm font-bold text-gray-700 mb-3">Resultado da Manutenção *</label>
-                        <div class="grid grid-cols-2 gap-3">
-                            <button onclick="state.statusFechamento='Aprovada'; render()"
-                                class="p-4 rounded-xl border-2 font-bold transition-all flex flex-col items-center gap-2
-                                ${state.statusFechamento === 'Aprovada' 
-                                    ? 'bg-green-50 border-green-500 text-green-700' 
-                                    : 'border-gray-200 text-gray-400 hover:bg-gray-50'}">
-                                <i class="ph ph-thumbs-up text-3xl"></i>
-                                Aprovada
-                            </button>
-                            
-                            <button onclick="state.statusFechamento='Rejeitada'; render()"
-                                class="p-4 rounded-xl border-2 font-bold transition-all flex flex-col items-center gap-2
-                                ${state.statusFechamento === 'Rejeitada' 
-                                    ? 'bg-red-50 border-red-500 text-red-700' 
-                                    : 'border-gray-200 text-gray-400 hover:bg-gray-50'}">
-                                <i class="ph ph-thumbs-down text-3xl"></i>
-                                Rejeitada
-                            </button>
-                        </div>
-                    </div>
-
-                    <div class="pt-4 space-y-3">
-                        <button onclick="handleCloseOrder()" class="w-full bg-[#1F4E78] text-white font-bold py-4 rounded-xl shadow-lg">
-                            CONFIRMAR E FECHAR
-                        </button>
-                        <button onclick="state.view='history'; state.closingId=null; render()" class="w-full text-gray-500 font-bold py-3">
-                            CANCELAR
-                        </button>
-                    </div>
+                    ${state.editingId ? `<button onclick="state.view='form'; state.editingId=null; resetForm();" class="w-full py-3 text-gray-500 font-bold">CANCELAR EDIÇÃO</button>` : ''}
                 </div>
             `;
         }
 
         function renderHistory() {
             const records = getMaintenanceHistory();
-            if (!records.length) return `<div class="text-center py-12 text-gray-400"><i class="ph ph-files text-4xl mb-2"></i><p>Nenhum registro</p></div>`;
+            if (records.length === 0) return `<div class="text-center py-10 text-gray-500"><i class="ph ph-files text-4xl mb-2"></i><br>Nenhum registro encontrado.</div>`;
 
             return `
                 <div class="space-y-4">
                     ${records.map(r => `
-                        <div class="bg-white p-4 rounded-2xl shadow-sm border-l-4 
-                            ${r.statusOrdem.includes('Aprovada') ? 'border-green-500' : 
-                              r.statusOrdem.includes('Rejeitada') ? 'border-red-500' : 
-                              r.statusOrdem === 'Aberta' ? 'border-blue-500' : 'border-gray-300'}">
-                            
+                        <div class="bg-white p-4 rounded-2xl shadow-sm border-l-4 ${r.statusOrdem === 'Concluída' ? 'border-green-500' : 'border-blue-500'}">
                             <div class="flex justify-between items-start mb-2">
                                 <h3 class="font-bold text-gray-800 text-lg">${r.placa}</h3>
-                                <span class="text-[10px] px-2 py-1 rounded-full font-bold uppercase
-                                    ${r.status === 'synced' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}">
-                                    ${r.status === 'synced' ? 'Sync OK' : 'Pendente'}
+                                <span class="text-xs px-2 py-1 rounded bg-gray-100 font-bold ${r.status === 'synced' ? 'text-green-600' : 'text-orange-500'}">
+                                    ${r.status === 'synced' ? 'Sincronizado' : 'Pendente'}
                                 </span>
                             </div>
-                            
-                            <div class="text-sm text-gray-600 space-y-1 mb-3">
-                                <p class="truncate"><i class="ph ph-wrench mr-1"></i> ${r.tipoAvaria}</p>
-                                <p class="truncate"><i class="ph ph-storefront mr-1"></i> ${r.oficina}</p>
-                                <p><i class="ph ph-calendar mr-1"></i> ${formatDate(r.dataHoraAvaria)}</p>
-                                <div class="mt-2 inline-block px-2 py-1 rounded text-xs font-bold
-                                    ${r.statusOrdem.includes('Aprovada') ? 'bg-green-100 text-green-800' : 
-                                      r.statusOrdem.includes('Rejeitada') ? 'bg-red-100 text-red-800' : 'bg-blue-100 text-blue-800'}">
-                                    ${r.statusOrdem}
-                                </div>
+                            <div class="text-sm text-gray-600 space-y-1">
+                                <p><span class="font-semibold">Avaria:</span> ${r.tipoAvaria}</p>
+                                <p><span class="font-semibold">Oficina:</span> ${r.oficina}</p>
+                                <p><span class="font-semibold">Data:</span> ${formatDate(r.dataHoraAvaria)}</p>
+                                <p><span class="font-semibold">Status:</span> ${r.statusOrdem}</p>
                             </div>
-
-                            <div class="flex gap-2 border-t pt-3">
-                                <button onclick="loadRecordForEdit('${r.id}')" class="flex-1 py-2 bg-gray-50 text-gray-700 rounded-lg text-xs font-bold hover:bg-gray-100">EDITAR</button>
-                                ${!r.statusOrdem.includes('Manutenção') ? 
-                                    `<button onclick="state.closingId='${r.id}'; loadRecordForClose('${r.id}')" class="flex-1 py-2 bg-[#1F4E78] text-white rounded-lg text-xs font-bold">FECHAR</button>` : ''}
+                            <div class="mt-3 flex gap-2 pt-3 border-t">
+                                <button onclick="loadRecordForEdit('${r.id}')" class="flex-1 py-2 bg-blue-50 text-blue-700 rounded-lg text-sm font-bold">EDITAR</button>
+                                ${r.statusOrdem !== 'Concluída' ? 
+                                    `<button onclick="loadRecordForClose('${r.id}')" class="flex-1 py-2 bg-green-50 text-green-700 rounded-lg text-sm font-bold">FECHAR</button>` : ''}
                             </div>
                         </div>
                     `).join('')}
-                    <button onclick="if(confirm('Limpar?')) { localStorage.removeItem('maintenance_history'); render(); }" class="w-full py-6 text-red-300 text-xs">Limpar Cache Local</button>
+                    <button onclick="localStorage.removeItem('maintenance_history'); render()" class="w-full py-4 text-red-400 text-sm">Limpar Histórico Local</button>
                 </div>
             `;
         }
@@ -641,15 +656,41 @@
         function renderSuccess() {
             return `
                 <div class="flex flex-col items-center justify-center min-h-[60vh] text-center">
-                    <div class="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mb-6 text-green-600 animate-bounce">
+                    <div class="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mb-4 text-green-600">
                         <i class="ph ph-check text-4xl"></i>
                     </div>
                     <h2 class="text-2xl font-bold text-gray-800 mb-2">Sucesso!</h2>
-                    <p class="text-gray-500 mb-8">Operação realizada com sucesso.</p>
+                    <p class="text-gray-500 mb-8">A ordem foi salva corretamente.</p>
                     <button onclick="resetForm()" class="w-full bg-[#1F4E78] text-white font-bold py-4 rounded-xl shadow-lg mb-4">NOVA ORDEM</button>
-                    <button onclick="state.view='history'; render()" class="w-full border-2 border-gray-200 font-bold py-4 rounded-xl text-gray-600">VER HISTÓRICO</button>
+                    <button onclick="state.view='history'; render()" class="w-full border-2 border-gray-200 font-bold py-4 rounded-xl">VER HISTÓRICO</button>
                 </div>
             `;
+        }
+        
+        function renderCloseOrder() {
+            const record = getMaintenanceHistory().find(r => r.id === state.closingId);
+            if(!record) return 'Erro ao carregar';
+            
+            return `
+                <div class="bg-white p-5 rounded-2xl shadow-sm">
+                   <h3 class="font-bold text-gray-800 mb-4">${record.placa} - ${record.tipoAvaria}</h3>
+                   <div class="mb-6">
+                        <label class="block text-sm font-bold text-gray-700 mb-1">Data/Hora do Retorno *</label>
+                        <input type="datetime-local" class="w-full border border-gray-300 rounded-lg p-3"
+                            value="${state.dataHoraFechamento}" oninput="state.dataHoraFechamento = this.value">
+                        <p class="text-xs text-gray-500 mt-2">Quando o veículo ficou pronto?</p>
+                   </div>
+                   <button onclick="handleCloseOrder()" class="w-full bg-green-600 text-white font-bold py-4 rounded-xl shadow-lg mb-3">
+                        CONFIRMAR FECHAMENTO
+                   </button>
+                   <button onclick="state.view='history'; render()" class="w-full text-gray-500 font-bold py-3">CANCELAR</button>
+                </div>
+            `;
+        }
+
+        function getPriorityStyle(p) {
+            const map = { 'URGENTE': 'bg-red-500 text-white border-red-500', 'ALTA': 'bg-orange-500 text-white border-orange-500', 'MEDIA': 'bg-yellow-400 text-black border-yellow-400', 'BAIXA': 'bg-green-500 text-white border-green-500' };
+            return map[p] || '';
         }
 
         function resetForm() {
@@ -658,17 +699,16 @@
             state.placa = '';
             state.tipoEquipamento = '';
             state.tipoManutencao = '';
-            state.tipoManutencaoCustom = '';
+            state.prioridade = '';
             state.tipoAvaria = '';
-            state.tipoAvariaCustom = '';
             state.descricao = '';
+            state.local = '';
             state.oficina = '';
-            state.oficinaCustom = '';
             state.responsavel = '';
             state.observacoes = '';
+            state.statusOrdem = 'Aberta';
             state.dataHoraAvaria = '';
             state.searchTerm = '';
-            state.statusOrdem = 'Aberta';
             state.showCustomManutencao = false;
             state.showCustomOficina = false;
             state.showCustomAvaria = false;
@@ -677,7 +717,7 @@
         }
 
         // ============================================
-        // INIT
+        // INICIALIZAÇÃO
         // ============================================
         document.addEventListener('DOMContentLoaded', () => {
             const savedSupervisor = localStorage.getItem('supervisor_name');
@@ -688,7 +728,8 @@
             }
             render();
         });
-        window.addEventListener('beforeunload', () => clearInterval(syncIntervalId));
+        
+        window.addEventListener('beforeunload', stopAutoSync);
     </script>
 </body>
 </html>
