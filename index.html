@@ -16,10 +16,12 @@
         body { -webkit-tap-highlight-color: transparent; overscroll-behavior-y: none; }
         .animate-spin { animation: spin 1s linear infinite; }
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-        /* Impressão limpa para o histórico */
+        
+        /* Ajustes para Print/Screenshot */
         @media print {
-            .no-print { display: none; }
+            .no-print { display: none !important; }
             body { background: white; }
+            .print-card { break-inside: avoid; border: 1px solid #ccc; }
         }
     </style>
 </head>
@@ -30,7 +32,7 @@
         // ============================================
         // CONFIGURAÇÃO
         // ============================================
-        // ⚠️ INSIRA A URL DO SEU SCRIPT AQUI ABAIXO ⚠️
+        // ⚠️ MANTENHA SUA URL AQUI
         const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzC--8soBc2wXA5vViHeHCFM836w9ZZ_ow_oYqmTRKuPqQNd9DhoImcx3DZYlv38jS5NA/exec'; 
         
         const SYNC_INTERVAL = 30000;
@@ -82,7 +84,6 @@
             supervisor: '',
             editingId: null,
             closingId: null,
-            // Campos do Formulário
             placa: '',
             tipoEquipamento: '',
             tipoManutencao: '',
@@ -94,10 +95,8 @@
             oficinaCustom: '',
             observacoes: '',
             dataHoraAvaria: '',
-            // Campos de Fechamento
             dataHoraFechamento: '',
-            statusFechamento: '', // Aprovada ou Reprovada
-            // Controle
+            statusFechamento: '',
             statusOrdem: 'Aberta',
             isLoading: false,
             isSyncing: false,
@@ -107,7 +106,7 @@
         };
 
         // ============================================
-        // SERVIÇOS
+        // SERVIÇOS & SYNC
         // ============================================
         async function submitToSheet(record) {
             try {
@@ -140,22 +139,19 @@
             if (state.isSyncing) return;
             state.isSyncing = true;
             render(); 
-
             const history = getMaintenanceHistory();
             const pending = history.filter(r => r.status === 'pending');
-            
             for (const record of pending) {
                 const result = await submitToSheet(record);
                 if (result.success) updateHistoryStatus(record.id, 'synced');
             }
             await fetchFromSheet();
-            
             state.isSyncing = false;
             render();
         }
 
         // ============================================
-        // UTILITÁRIOS & STORAGE
+        // UTILITÁRIOS (DATA & TEMPO)
         // ============================================
         function getMaintenanceHistory() {
             return JSON.parse(localStorage.getItem('maintenance_history') || '[]');
@@ -194,8 +190,33 @@
             });
         }
 
+        // --- NOVA FUNÇÃO DE CÁLCULO DE TEMPO ---
+        function calculateDuration(start, end) {
+            if (!start) return '-';
+            if (!end) return 'Em andamento...';
+            
+            const startDate = new Date(start);
+            const endDate = new Date(end);
+            
+            if (isNaN(startDate) || isNaN(endDate)) return '-';
+
+            const diffMs = endDate - startDate;
+            if (diffMs < 0) return 'Data Inválida';
+
+            const minutes = Math.floor(diffMs / 60000);
+            const hours = Math.floor(minutes / 60);
+            const days = Math.floor(hours / 24);
+            
+            const remHours = hours % 24;
+            const remMin = minutes % 60;
+
+            if (days > 0) return `${days}d ${remHours}h ${remMin}m`;
+            if (hours > 0) return `${hours}h ${remMin}m`;
+            return `${remMin} min`;
+        }
+
         // ============================================
-        // LÓGICA DE NEGÓCIO
+        // LOGICA DE INTERFACE
         // ============================================
         function handleLogin(e) {
             e.preventDefault();
@@ -260,60 +281,42 @@
 
             saveToHistory(record);
             const result = await submitToSheet(record);
-
             state.isLoading = false;
             if (result.success) updateHistoryStatus(record.id, 'synced');
-            
             state.view = 'success';
             state.editingId = null;
             render();
         }
 
-        // ============================================
-        // FUNÇÃO DE FECHAMENTO (CORRIGIDA E EXPANDIDA)
-        // ============================================
         function loadRecordForClose(id) {
             const r = getMaintenanceHistory().find(x => x.id === id);
             if (!r) return;
-            
             state.closingId = id;
-            // Preenche data atual automaticamente
             const now = new Date();
             const offsetMs = now.getTimezoneOffset() * 60 * 1000;
             state.dataHoraFechamento = new Date(now.getTime() - offsetMs).toISOString().slice(0, 16);
             state.statusFechamento = '';
-            
             state.view = 'close';
             render();
         }
 
         async function handleCloseOrder() {
-            if (!state.dataHoraFechamento) {
-                alert('Informe a data/hora de retorno.');
+            if (!state.dataHoraFechamento || !state.statusFechamento) {
+                alert('Informe data e status.');
                 return;
             }
-            if (!state.statusFechamento) {
-                alert('Você deve APROVAR ou REPROVAR a manutenção.');
-                return;
-            }
-
             state.isLoading = true;
             render();
-
             const history = getMaintenanceHistory();
             const record = history.find(r => r.id === state.closingId);
-
             if (record) {
                 record.dataHoraFechamento = new Date(state.dataHoraFechamento).toISOString();
-                // Status final baseado na escolha
                 record.statusOrdem = `Manutenção ${state.statusFechamento}`;
                 record.status = 'pending';
-                
                 saveToHistory(record);
                 const result = await submitToSheet(record);
                 if (result.success) updateHistoryStatus(record.id, 'synced');
             }
-
             state.isLoading = false;
             state.closingId = null;
             state.statusFechamento = '';
@@ -321,13 +324,9 @@
             render();
         }
 
-        // ============================================
-        // CARREGAMENTO DE DADOS
-        // ============================================
         function loadRecordForEdit(id) {
             const r = getMaintenanceHistory().find(x => x.id === id);
             if (!r) return;
-
             state.editingId = r.id;
             state.placa = r.placa;
             state.tipoEquipamento = r.tipoEquipamento;
@@ -336,8 +335,7 @@
             state.descricao = r.descricaoAvaria;
             state.observacoes = r.observacoes || '';
             state.statusOrdem = r.statusOrdem;
-
-            // Lógica Inputs Custom
+            
             if (MAINTENANCE_TYPES.includes(r.tipoManutencao)) {
                 state.tipoManutencao = r.tipoManutencao;
                 state.showCustomManutencao = false;
@@ -346,7 +344,6 @@
                 state.tipoManutencaoCustom = r.tipoManutencao;
                 state.showCustomManutencao = true;
             }
-
             if (WORKSHOPS.includes(r.oficina)) {
                 state.oficina = r.oficina;
                 state.showCustomOficina = false;
@@ -355,7 +352,6 @@
                 state.oficinaCustom = r.oficina;
                 state.showCustomOficina = true;
             }
-
             const failures = FAILURES_BY_TYPE[r.tipoEquipamento] || [];
             if (failures.includes(r.tipoAvaria)) {
                 state.tipoAvaria = r.tipoAvaria;
@@ -365,7 +361,6 @@
                 state.tipoAvariaCustom = r.tipoAvaria;
                 state.showCustomAvaria = true;
             }
-
             state.view = 'form';
             render();
         }
@@ -389,7 +384,7 @@
                     content = renderHistory();
                     title = 'Histórico Detalhado';
                     break;
-                default: // form
+                default:
                     content = renderForm();
                     title = state.editingId ? 'Editar Ordem' : 'Nova Manutenção';
             }
@@ -436,106 +431,69 @@
         }
 
         function renderForm() {
-            // Apenas lista suspensa (removida a barra de pesquisa)
             const allPlates = Object.keys(FLEET_DATA);
             const failures = state.tipoEquipamento ? FAILURES_BY_TYPE[state.tipoEquipamento] || [] : [];
-
             return `
                 <div class="space-y-6">
-                    <!-- SELEÇÃO DE EQUIPAMENTO (CORRIGIDO: Sem filtro texto) -->
                     <div class="bg-white p-5 rounded-2xl shadow-sm">
                         <h3 class="font-bold text-[#1F4E78] mb-4 border-b pb-2 flex items-center gap-2">
                             <i class="ph ph-truck text-xl"></i> Equipamento
                         </h3>
-
                         <div class="mb-4">
                             <label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Selecione a Placa *</label>
                             <select class="w-full border-2 border-gray-200 rounded-lg p-4 font-bold text-gray-800 focus:border-[#1F4E78] bg-white"
                                 onchange="state.placa = this.value; state.tipoEquipamento = FLEET_DATA[this.value]; state.tipoAvaria=''; render()">
                                 <option value="" disabled ${!state.placa ? 'selected' : ''}>Toque para selecionar...</option>
-                                ${allPlates.map(p => `
-                                    <option value="${p}" ${state.placa === p ? 'selected' : ''}>${p} - ${FLEET_DATA[p]}</option>
-                                `).join('')}
+                                ${allPlates.map(p => `<option value="${p}" ${state.placa === p ? 'selected' : ''}>${p} - ${FLEET_DATA[p]}</option>`).join('')}
                             </select>
                         </div>
-                        
-                        ${state.tipoEquipamento ? `
-                            <div class="mt-2 text-sm text-blue-800 bg-blue-50 p-3 rounded-lg flex items-center gap-2 border border-blue-100">
-                                <i class="ph ph-info text-lg"></i>
-                                <span class="font-semibold">${state.tipoEquipamento}</span>
-                            </div>
-                        ` : ''}
+                        ${state.tipoEquipamento ? `<div class="mt-2 text-sm text-blue-800 bg-blue-50 p-3 rounded-lg flex items-center gap-2 border border-blue-100"><i class="ph ph-info text-lg"></i><span class="font-semibold">${state.tipoEquipamento}</span></div>` : ''}
                     </div>
 
-                    <!-- DETALHES -->
                     <div class="bg-white p-5 rounded-2xl shadow-sm">
                         <h3 class="font-bold text-[#1F4E78] mb-4 border-b pb-2 flex items-center gap-2">
                             <i class="ph ph-clipboard-text text-xl"></i> Detalhes da Avaria
                         </h3>
-                        
                         <div class="mb-4">
                             <label class="block text-sm font-bold text-gray-700 mb-1">Data/Hora da Avaria *</label>
-                            <input type="datetime-local" class="w-full border border-gray-300 rounded-lg p-3"
-                                value="${state.dataHoraAvaria}" oninput="state.dataHoraAvaria = this.value">
+                            <input type="datetime-local" class="w-full border border-gray-300 rounded-lg p-3" value="${state.dataHoraAvaria}" oninput="state.dataHoraAvaria = this.value">
                         </div>
-
                         <div class="mb-4">
                             <label class="block text-sm font-bold text-gray-700 mb-1">Tipo de Manutenção *</label>
-                            <select class="w-full border border-gray-300 rounded-lg p-3 bg-white"
-                                onchange="state.tipoManutencao = this.value; state.showCustomManutencao = (this.value === 'Outro'); render()">
+                            <select class="w-full border border-gray-300 rounded-lg p-3 bg-white" onchange="state.tipoManutencao = this.value; state.showCustomManutencao = (this.value === 'Outro'); render()">
                                 <option value="" disabled ${!state.tipoManutencao ? 'selected' : ''}>Selecione...</option>
                                 ${MAINTENANCE_TYPES.map(t => `<option value="${t}" ${state.tipoManutencao === t ? 'selected' : ''}>${t}</option>`).join('')}
                             </select>
                             ${state.showCustomManutencao ? `<input type="text" class="mt-2 w-full border border-gray-300 rounded-lg p-3" placeholder="Especifique..." value="${state.tipoManutencaoCustom}" oninput="state.tipoManutencaoCustom = this.value">` : ''}
                         </div>
-
-                        ${state.tipoEquipamento ? `
-                        <div class="mb-4">
-                            <label class="block text-sm font-bold text-gray-700 mb-1">Componente/Falha *</label>
-                            <select class="w-full border border-gray-300 rounded-lg p-3 bg-white"
-                                onchange="state.tipoAvaria = this.value; state.showCustomAvaria = (this.value === 'Outro'); render()">
-                                <option value="" disabled ${!state.tipoAvaria ? 'selected' : ''}>Selecione...</option>
-                                ${failures.map(f => `<option value="${f}" ${state.tipoAvaria === f ? 'selected' : ''}>${f}</option>`).join('')}
-                            </select>
-                            ${state.showCustomAvaria ? `<input type="text" class="mt-2 w-full border border-gray-300 rounded-lg p-3" placeholder="Especifique..." value="${state.tipoAvariaCustom}" oninput="state.tipoAvariaCustom = this.value">` : ''}
-                        </div>
-                        ` : ''}
-
+                        ${state.tipoEquipamento ? `<div class="mb-4"><label class="block text-sm font-bold text-gray-700 mb-1">Componente/Falha *</label><select class="w-full border border-gray-300 rounded-lg p-3 bg-white" onchange="state.tipoAvaria = this.value; state.showCustomAvaria = (this.value === 'Outro'); render()"><option value="" disabled ${!state.tipoAvaria ? 'selected' : ''}>Selecione...</option>${failures.map(f => `<option value="${f}" ${state.tipoAvaria === f ? 'selected' : ''}>${f}</option>`).join('')}</select>${state.showCustomAvaria ? `<input type="text" class="mt-2 w-full border border-gray-300 rounded-lg p-3" placeholder="Especifique..." value="${state.tipoAvariaCustom}" oninput="state.tipoAvariaCustom = this.value">` : ''}</div>` : ''}
                         <div class="mb-4">
                             <label class="block text-sm font-bold text-gray-700 mb-1">Descrição Detalhada *</label>
-                            <textarea class="w-full border border-gray-300 rounded-lg p-3 h-24 resize-none" 
-                                placeholder="Descreva o problema..." oninput="state.descricao = this.value">${state.descricao}</textarea>
+                            <textarea class="w-full border border-gray-300 rounded-lg p-3 h-24 resize-none" placeholder="Descreva o problema..." oninput="state.descricao = this.value">${state.descricao}</textarea>
                         </div>
                     </div>
 
-                    <!-- EXECUÇÃO (SEM RESPONSÁVEL) -->
                     <div class="bg-white p-5 rounded-2xl shadow-sm">
                         <h3 class="font-bold text-[#1F4E78] mb-4 border-b pb-2 flex items-center gap-2">
                             <i class="ph ph-wrench text-xl"></i> Execução
                         </h3>
-                        
                         <div class="mb-4">
                             <label class="block text-sm font-bold text-gray-700 mb-1">Oficina / Destino *</label>
-                            <select class="w-full border border-gray-300 rounded-lg p-3 bg-white"
-                                onchange="state.oficina = this.value; state.showCustomOficina = (this.value === 'Outro'); render()">
+                            <select class="w-full border border-gray-300 rounded-lg p-3 bg-white" onchange="state.oficina = this.value; state.showCustomOficina = (this.value === 'Outro'); render()">
                                 <option value="" disabled ${!state.oficina ? 'selected' : ''}>Selecione...</option>
                                 ${WORKSHOPS.map(w => `<option value="${w}" ${state.oficina === w ? 'selected' : ''}>${w}</option>`).join('')}
                             </select>
                             ${state.showCustomOficina ? `<input type="text" class="mt-2 w-full border border-gray-300 rounded-lg p-3" placeholder="Nome da oficina..." value="${state.oficinaCustom}" oninput="state.oficinaCustom = this.value">` : ''}
                         </div>
-                        
                         <div class="mb-4">
                             <label class="block text-sm font-bold text-gray-700 mb-1">Observações (Opcional)</label>
-                            <input type="text" class="w-full border border-gray-300 rounded-lg p-3"
-                                placeholder="..." value="${state.observacoes}" oninput="state.observacoes = this.value">
+                            <input type="text" class="w-full border border-gray-300 rounded-lg p-3" placeholder="..." value="${state.observacoes}" oninput="state.observacoes = this.value">
                         </div>
                     </div>
 
-                    <button onclick="handleSubmit()" ${state.isLoading ? 'disabled' : ''}
-                        class="w-full py-4 rounded-xl text-white font-bold shadow-lg flex justify-center items-center gap-2 ${state.isLoading ? 'bg-gray-400' : 'bg-[#1F4E78] active:scale-95'}">
+                    <button onclick="handleSubmit()" ${state.isLoading ? 'disabled' : ''} class="w-full py-4 rounded-xl text-white font-bold shadow-lg flex justify-center items-center gap-2 ${state.isLoading ? 'bg-gray-400' : 'bg-[#1F4E78] active:scale-95'}">
                         ${state.isLoading ? '<i class="ph ph-spinner animate-spin text-2xl"></i> PROCESSANDO...' : (state.editingId ? 'ATUALIZAR ORDEM' : 'ABRIR ORDEM')}
                     </button>
-                    
                     ${state.editingId ? `<button onclick="resetForm()" class="w-full py-3 text-gray-500 font-bold">CANCELAR EDIÇÃO</button>` : ''}
                 </div>
             `;
@@ -544,6 +502,9 @@
         function renderCloseOrder() {
             const r = getMaintenanceHistory().find(x => x.id === state.closingId);
             if(!r) return 'Erro de registro';
+            
+            // Calculo dinamico para exibir enquanto escolhe a data
+            const duracaoAtual = calculateDuration(r.dataHoraAvaria, state.dataHoraFechamento);
 
             return `
                 <div class="bg-white p-6 rounded-2xl shadow-sm space-y-6">
@@ -555,41 +516,32 @@
                     <div>
                         <label class="block text-sm font-bold text-gray-700 mb-2">Data/Hora de Retorno *</label>
                         <input type="datetime-local" class="w-full border-2 border-gray-200 rounded-xl p-4 focus:border-[#1F4E78]"
-                            value="${state.dataHoraFechamento}" oninput="state.dataHoraFechamento = this.value">
-                        <p class="text-xs text-gray-400 mt-1">O cálculo de horas será feito automaticamente ao salvar.</p>
+                            value="${state.dataHoraFechamento}" oninput="state.dataHoraFechamento = this.value; render()">
+                        
+                        <!-- Mostra o tempo calculado ao vivo -->
+                        <div class="mt-3 p-3 bg-blue-50 rounded-lg border border-blue-100 flex items-center justify-between">
+                            <span class="text-xs font-bold text-blue-800 uppercase">Tempo Calculado:</span>
+                            <span class="font-bold text-blue-900">${duracaoAtual}</span>
+                        </div>
                     </div>
 
-                    <!-- BOTÕES DE APROVAÇÃO -->
                     <div>
                         <label class="block text-sm font-bold text-gray-700 mb-3 text-center">AVALIAÇÃO DA MANUTENÇÃO *</label>
                         <div class="grid grid-cols-2 gap-4">
                             <button onclick="state.statusFechamento='Aprovada'; render()"
-                                class="p-6 rounded-xl border-4 transition-all flex flex-col items-center gap-2 shadow-sm
-                                ${state.statusFechamento === 'Aprovada' 
-                                    ? 'bg-green-50 border-green-500 text-green-700 scale-105' 
-                                    : 'border-gray-100 text-gray-400 hover:border-green-200'}">
-                                <i class="ph ph-check-circle text-4xl"></i>
-                                <span class="font-bold uppercase">Aprovada</span>
+                                class="p-6 rounded-xl border-4 transition-all flex flex-col items-center gap-2 shadow-sm ${state.statusFechamento === 'Aprovada' ? 'bg-green-50 border-green-500 text-green-700 scale-105' : 'border-gray-100 text-gray-400 hover:border-green-200'}">
+                                <i class="ph ph-check-circle text-4xl"></i><span class="font-bold uppercase">Aprovada</span>
                             </button>
-                            
                             <button onclick="state.statusFechamento='Reprovada'; render()"
-                                class="p-6 rounded-xl border-4 transition-all flex flex-col items-center gap-2 shadow-sm
-                                ${state.statusFechamento === 'Reprovada' 
-                                    ? 'bg-red-50 border-red-500 text-red-700 scale-105' 
-                                    : 'border-gray-100 text-gray-400 hover:border-red-200'}">
-                                <i class="ph ph-x-circle text-4xl"></i>
-                                <span class="font-bold uppercase">Reprovada</span>
+                                class="p-6 rounded-xl border-4 transition-all flex flex-col items-center gap-2 shadow-sm ${state.statusFechamento === 'Reprovada' ? 'bg-red-50 border-red-500 text-red-700 scale-105' : 'border-gray-100 text-gray-400 hover:border-red-200'}">
+                                <i class="ph ph-x-circle text-4xl"></i><span class="font-bold uppercase">Reprovada</span>
                             </button>
                         </div>
                     </div>
 
                     <div class="pt-4 space-y-3">
-                        <button onclick="handleCloseOrder()" class="w-full bg-[#1F4E78] text-white font-bold py-4 rounded-xl shadow-lg">
-                            CONFIRMAR E FECHAR
-                        </button>
-                        <button onclick="state.view='history'; state.closingId=null; render()" class="w-full text-gray-500 font-bold py-3">
-                            CANCELAR
-                        </button>
+                        <button onclick="handleCloseOrder()" class="w-full bg-[#1F4E78] text-white font-bold py-4 rounded-xl shadow-lg">CONFIRMAR E FECHAR</button>
+                        <button onclick="state.view='history'; state.closingId=null; render()" class="w-full text-gray-500 font-bold py-3">CANCELAR</button>
                     </div>
                 </div>
             `;
@@ -599,16 +551,13 @@
             const records = getMaintenanceHistory();
             if (!records.length) return `<div class="text-center py-12 text-gray-400"><i class="ph ph-files text-4xl mb-2"></i><p>Nenhum registro</p></div>`;
 
-            // LAYOUT DETALHADO PARA PRINT DE WHATSAPP
             return `
                 <div class="space-y-6">
-                    ${records.map(r => `
-                        <div class="bg-white rounded-xl shadow-md overflow-hidden border border-gray-200">
-                            <!-- Cabeçalho do Cartão -->
-                            <div class="p-3 text-white flex justify-between items-center
-                                ${r.statusOrdem.includes('Aprovada') ? 'bg-green-600' : 
-                                  r.statusOrdem.includes('Reprovada') ? 'bg-red-600' : 
-                                  r.statusOrdem === 'Aberta' ? 'bg-[#1F4E78]' : 'bg-gray-500'}">
+                    ${records.map(r => {
+                        const duration = calculateDuration(r.dataHoraAvaria, r.dataHoraFechamento);
+                        return `
+                        <div class="bg-white rounded-xl shadow-md overflow-hidden border border-gray-200 print-card">
+                            <div class="p-3 text-white flex justify-between items-center ${r.statusOrdem.includes('Aprovada') ? 'bg-green-600' : r.statusOrdem.includes('Reprovada') ? 'bg-red-600' : r.statusOrdem === 'Aberta' ? 'bg-[#1F4E78]' : 'bg-gray-500'}">
                                 <div>
                                     <h3 class="font-bold text-lg leading-tight">${r.placa}</h3>
                                     <p class="text-xs opacity-90">${r.tipoEquipamento}</p>
@@ -618,54 +567,32 @@
                                     <span class="text-[10px] opacity-75">ID: ${r.id.slice(-6)}</span>
                                 </div>
                             </div>
-
-                            <!-- Corpo do Cartão -->
                             <div class="p-4 text-sm text-gray-700 space-y-3">
-                                
                                 <div class="grid grid-cols-2 gap-2 border-b border-gray-100 pb-2">
-                                    <div>
-                                        <span class="block text-xs text-gray-400 font-bold uppercase">Saída/Avaria</span>
-                                        <span class="font-semibold text-gray-800">${formatDisplayDate(r.dataHoraAvaria)}</span>
-                                    </div>
-                                    <div>
-                                        <span class="block text-xs text-gray-400 font-bold uppercase">Retorno</span>
-                                        <span class="font-semibold text-gray-800">${formatDisplayDate(r.dataHoraFechamento)}</span>
-                                    </div>
+                                    <div><span class="block text-xs text-gray-400 font-bold uppercase">Saída/Avaria</span><span class="font-semibold text-gray-800">${formatDisplayDate(r.dataHoraAvaria)}</span></div>
+                                    <div><span class="block text-xs text-gray-400 font-bold uppercase">Retorno</span><span class="font-semibold text-gray-800">${formatDisplayDate(r.dataHoraFechamento)}</span></div>
                                 </div>
 
-                                <div>
-                                    <span class="block text-xs text-gray-400 font-bold uppercase">Falha Informada</span>
-                                    <div class="font-bold text-red-600">${r.tipoAvaria}</div>
+                                <!-- NOVA ÁREA: TEMPO TOTAL -->
+                                <div class="bg-gray-100 rounded-lg p-2 text-center border border-gray-200">
+                                    <span class="block text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-1">⏱️ Tempo Total em Manutenção</span>
+                                    <div class="font-black text-lg text-gray-800">${duration}</div>
                                 </div>
 
-                                <div class="bg-gray-50 p-2 rounded border border-gray-100">
-                                    <span class="block text-xs text-gray-400 font-bold uppercase mb-1">Descrição do Problema</span>
-                                    <p class="italic text-gray-600 leading-snug">"${r.descricaoAvaria}"</p>
-                                </div>
-
+                                <div><span class="block text-xs text-gray-400 font-bold uppercase">Falha Informada</span><div class="font-bold text-red-600">${r.tipoAvaria}</div></div>
+                                <div class="bg-gray-50 p-2 rounded border border-gray-100"><span class="block text-xs text-gray-400 font-bold uppercase mb-1">Descrição do Problema</span><p class="italic text-gray-600 leading-snug">"${r.descricaoAvaria}"</p></div>
                                 <div class="grid grid-cols-2 gap-2 pt-1">
-                                    <div>
-                                        <span class="block text-xs text-gray-400 font-bold uppercase">Oficina</span>
-                                        <span class="font-medium">${r.oficina}</span>
-                                    </div>
-                                    <div>
-                                        <span class="block text-xs text-gray-400 font-bold uppercase">Supervisor</span>
-                                        <span class="font-medium">${r.supervisor}</span>
-                                    </div>
+                                    <div><span class="block text-xs text-gray-400 font-bold uppercase">Oficina</span><span class="font-medium">${r.oficina}</span></div>
+                                    <div><span class="block text-xs text-gray-400 font-bold uppercase">Supervisor</span><span class="font-medium">${r.supervisor}</span></div>
                                 </div>
                             </div>
-
-                            <!-- Rodapé de Ações (Não sai no print se quiser esconder, mas útil para operar) -->
                             <div class="bg-gray-50 p-2 flex gap-2 border-t border-gray-100 no-print">
                                 <button onclick="loadRecordForEdit('${r.id}')" class="flex-1 py-2 bg-white border border-gray-300 rounded text-xs font-bold text-gray-600">EDITAR</button>
-                                ${!r.statusOrdem.includes('Manutenção') ? 
-                                    `<button onclick="loadRecordForClose('${r.id}')" class="flex-1 py-2 bg-[#1F4E78] text-white rounded text-xs font-bold shadow-sm">FECHAR ORDEM</button>` : ''}
+                                ${!r.statusOrdem.includes('Manutenção') ? `<button onclick="loadRecordForClose('${r.id}')" class="flex-1 py-2 bg-[#1F4E78] text-white rounded text-xs font-bold shadow-sm">FECHAR ORDEM</button>` : ''}
                             </div>
                         </div>
-                    `).join('')}
-                    <div class="text-center pt-4 no-print">
-                        <button onclick="if(confirm('Limpar dados locais?')) { localStorage.removeItem('maintenance_history'); render(); }" class="text-red-300 text-xs underline">Limpar Cache</button>
-                    </div>
+                    `}).join('')}
+                    <div class="text-center pt-4 no-print"><button onclick="if(confirm('Limpar dados locais?')) { localStorage.removeItem('maintenance_history'); render(); }" class="text-red-300 text-xs underline">Limpar Cache</button></div>
                 </div>
             `;
         }
@@ -673,9 +600,7 @@
         function renderSuccess() {
             return `
                 <div class="flex flex-col items-center justify-center min-h-[60vh] text-center">
-                    <div class="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mb-6 text-green-600 animate-bounce">
-                        <i class="ph ph-check text-4xl"></i>
-                    </div>
+                    <div class="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mb-6 text-green-600 animate-bounce"><i class="ph ph-check text-4xl"></i></div>
                     <h2 class="text-2xl font-bold text-gray-800 mb-2">Sucesso!</h2>
                     <p class="text-gray-500 mb-8">Operação registrada e sincronizada.</p>
                     <button onclick="resetForm()" class="w-full bg-[#1F4E78] text-white font-bold py-4 rounded-xl shadow-lg mb-4">NOVA ORDEM</button>
@@ -706,9 +631,6 @@
             render();
         }
 
-        // ============================================
-        // INIT
-        // ============================================
         document.addEventListener('DOMContentLoaded', () => {
             const savedSupervisor = localStorage.getItem('supervisor_name');
             if (savedSupervisor) {
