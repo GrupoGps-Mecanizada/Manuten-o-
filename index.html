@@ -16,9 +16,11 @@
         body { -webkit-tap-highlight-color: transparent; overscroll-behavior-y: none; }
         .animate-spin { animation: spin 1s linear infinite; }
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-        /* Esconde barra de rolagem mas permite scroll */
-        .no-scrollbar::-webkit-scrollbar { display: none; }
-        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        /* Impressão limpa para o histórico */
+        @media print {
+            .no-print { display: none; }
+            body { background: white; }
+        }
     </style>
 </head>
 <body class="bg-gray-100 font-sans">
@@ -28,8 +30,8 @@
         // ============================================
         // CONFIGURAÇÃO
         // ============================================
-        // ⚠️ Substitua pela sua URL de implantação (Web App -> Anyone)
-        const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxsmqHodlxOU2awdTe85nvqLtDaCWwOKYVToIElnGlWvq7AZsITb-D3_LUW88CnGroF0A/exec'; 
+        // ⚠️ INSIRA A URL DO SEU SCRIPT AQUI ABAIXO ⚠️
+        const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzC--8soBc2wXA5vViHeHCFM836w9ZZ_ow_oYqmTRKuPqQNd9DhoImcx3DZYlv38jS5NA/exec'; 
         
         const SYNC_INTERVAL = 30000;
         let syncIntervalId = null;
@@ -62,8 +64,6 @@
         };
 
         const MAINTENANCE_TYPES = ["Preventiva", "Corretiva", "Preditiva", "Emergencial", "Outro"];
-        
-        // NOVAS OPÇÕES DE OFICINA
         const WORKSHOPS = ["SERVITEC", "PARANA MOLAS", "BORRACHARIA", "Outro"];
         
         const FAILURES_BY_TYPE = {
@@ -92,15 +92,13 @@
             descricao: '',
             oficina: '',
             oficinaCustom: '',
-            responsavel: '',
             observacoes: '',
             dataHoraAvaria: '',
             // Campos de Fechamento
             dataHoraFechamento: '',
-            statusFechamento: '', // Aprovada ou Rejeitada
+            statusFechamento: '', // Aprovada ou Reprovada
             // Controle
             statusOrdem: 'Aberta',
-            searchTerm: '',
             isLoading: false,
             isSyncing: false,
             showCustomManutencao: false,
@@ -188,14 +186,16 @@
             return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
         }
 
-        function formatDate(isoDate) {
+        function formatDisplayDate(isoDate) {
             if (!isoDate) return '-';
             const date = new Date(isoDate);
-            return isNaN(date.getTime()) ? isoDate : date.toLocaleString('pt-BR');
+            return isNaN(date.getTime()) ? isoDate : date.toLocaleString('pt-BR', { 
+                day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' 
+            });
         }
 
         // ============================================
-        // LOGICA DE NEGÓCIO
+        // LÓGICA DE NEGÓCIO
         // ============================================
         function handleLogin(e) {
             e.preventDefault();
@@ -222,10 +222,9 @@
 
         async function handleSubmit() {
             const { placa, tipoManutencao, tipoManutencaoCustom, tipoAvaria, tipoAvariaCustom, 
-                    descricao, oficina, oficinaCustom, responsavel, dataHoraAvaria } = state;
+                    descricao, oficina, oficinaCustom, dataHoraAvaria } = state;
             
-            // Validação simplificada (sem Prioridade e Local)
-            if (!placa || !descricao || !responsavel || !dataHoraAvaria) {
+            if (!placa || !descricao || !dataHoraAvaria) {
                 alert("Preencha campos com *");
                 return;
             }
@@ -254,7 +253,6 @@
                 tipoAvaria: finalAvaria,
                 descricaoAvaria: descricao.trim(),
                 oficina: finalOficina,
-                responsavelManutencao: responsavel.trim(),
                 observacoes: state.observacoes.trim(),
                 statusOrdem: state.statusOrdem,
                 status: 'pending'
@@ -271,13 +269,31 @@
             render();
         }
 
+        // ============================================
+        // FUNÇÃO DE FECHAMENTO (CORRIGIDA E EXPANDIDA)
+        // ============================================
+        function loadRecordForClose(id) {
+            const r = getMaintenanceHistory().find(x => x.id === id);
+            if (!r) return;
+            
+            state.closingId = id;
+            // Preenche data atual automaticamente
+            const now = new Date();
+            const offsetMs = now.getTimezoneOffset() * 60 * 1000;
+            state.dataHoraFechamento = new Date(now.getTime() - offsetMs).toISOString().slice(0, 16);
+            state.statusFechamento = '';
+            
+            state.view = 'close';
+            render();
+        }
+
         async function handleCloseOrder() {
             if (!state.dataHoraFechamento) {
                 alert('Informe a data/hora de retorno.');
                 return;
             }
             if (!state.statusFechamento) {
-                alert('Selecione se a manutenção foi Aprovada ou Rejeitada.');
+                alert('Você deve APROVAR ou REPROVAR a manutenção.');
                 return;
             }
 
@@ -289,7 +305,7 @@
 
             if (record) {
                 record.dataHoraFechamento = new Date(state.dataHoraFechamento).toISOString();
-                // Aqui define o status final
+                // Status final baseado na escolha
                 record.statusOrdem = `Manutenção ${state.statusFechamento}`;
                 record.status = 'pending';
                 
@@ -318,7 +334,6 @@
             state.dataHoraAbertura = r.dataHoraAbertura;
             state.dataHoraAvaria = formatDateTimeLocal(r.dataHoraAvaria);
             state.descricao = r.descricaoAvaria;
-            state.responsavel = r.responsavelManutencao;
             state.observacoes = r.observacoes || '';
             state.statusOrdem = r.statusOrdem;
 
@@ -368,11 +383,11 @@
                 case 'success': return app.innerHTML = renderSuccess();
                 case 'close': 
                     content = renderCloseOrder();
-                    title = 'Fechar Ordem';
+                    title = 'Finalizar Ordem';
                     break;
                 case 'history':
                     content = renderHistory();
-                    title = 'Histórico';
+                    title = 'Histórico Detalhado';
                     break;
                 default: // form
                     content = renderForm();
@@ -381,7 +396,7 @@
             
             app.innerHTML = `
                 <div class="min-h-screen bg-[#F5F5F5] pb-10">
-                    <header class="bg-[#1F4E78] text-white p-4 sticky top-0 z-30 shadow-md flex justify-between items-center">
+                    <header class="bg-[#1F4E78] text-white p-4 sticky top-0 z-30 shadow-md flex justify-between items-center no-print">
                         <div>
                             <h1 class="font-bold text-lg">${title}</h1>
                             <p class="text-xs opacity-80 uppercase">${state.supervisor}</p>
@@ -396,7 +411,7 @@
                             </button>
                         </div>
                     </header>
-                    <main class="p-4 max-w-lg mx-auto">${content}</main>
+                    <main class="p-4 max-w-2xl mx-auto">${content}</main>
                 </div>
             `;
         }
@@ -421,41 +436,24 @@
         }
 
         function renderForm() {
-            // Lógica de Filtro Inteligente da Placa
+            // Apenas lista suspensa (removida a barra de pesquisa)
             const allPlates = Object.keys(FLEET_DATA);
-            const filteredPlates = state.searchTerm 
-                ? allPlates.filter(p => p.toLowerCase().includes(state.searchTerm.toLowerCase()))
-                : allPlates;
-            
             const failures = state.tipoEquipamento ? FAILURES_BY_TYPE[state.tipoEquipamento] || [] : [];
 
             return `
                 <div class="space-y-6">
-                    <!-- PLACA INTELIGENTE -->
+                    <!-- SELEÇÃO DE EQUIPAMENTO (CORRIGIDO: Sem filtro texto) -->
                     <div class="bg-white p-5 rounded-2xl shadow-sm">
                         <h3 class="font-bold text-[#1F4E78] mb-4 border-b pb-2 flex items-center gap-2">
                             <i class="ph ph-truck text-xl"></i> Equipamento
                         </h3>
-                        
-                        <div class="mb-2">
-                            <label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Filtrar Placa</label>
-                            <div class="relative">
-                                <i class="ph ph-magnifying-glass absolute left-3 top-3.5 text-gray-400"></i>
-                                <input type="text" class="w-full border border-gray-300 rounded-lg p-3 pl-10"
-                                    placeholder="Digite número ou letras..." 
-                                    value="${state.searchTerm}"
-                                    oninput="state.searchTerm = this.value; render()"> <!-- Re-renderiza ao digitar -->
-                            </div>
-                        </div>
 
                         <div class="mb-4">
-                            <label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Selecionar Veículo *</label>
-                            <select class="w-full border-2 border-gray-200 rounded-lg p-3 font-bold text-gray-800 focus:border-[#1F4E78]"
-                                onchange="state.placa = this.value; state.tipoEquipamento = FLEET_DATA[this.value]; state.tipoAvaria=''; state.searchTerm=''; render()">
-                                <option value="" disabled ${!state.placa ? 'selected' : ''}>
-                                    ${filteredPlates.length === 0 ? 'Nenhuma placa encontrada' : 'Selecione na lista abaixo...'}
-                                </option>
-                                ${filteredPlates.map(p => `
+                            <label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Selecione a Placa *</label>
+                            <select class="w-full border-2 border-gray-200 rounded-lg p-4 font-bold text-gray-800 focus:border-[#1F4E78] bg-white"
+                                onchange="state.placa = this.value; state.tipoEquipamento = FLEET_DATA[this.value]; state.tipoAvaria=''; render()">
+                                <option value="" disabled ${!state.placa ? 'selected' : ''}>Toque para selecionar...</option>
+                                ${allPlates.map(p => `
                                     <option value="${p}" ${state.placa === p ? 'selected' : ''}>${p} - ${FLEET_DATA[p]}</option>
                                 `).join('')}
                             </select>
@@ -472,11 +470,11 @@
                     <!-- DETALHES -->
                     <div class="bg-white p-5 rounded-2xl shadow-sm">
                         <h3 class="font-bold text-[#1F4E78] mb-4 border-b pb-2 flex items-center gap-2">
-                            <i class="ph ph-clipboard-text text-xl"></i> Detalhes
+                            <i class="ph ph-clipboard-text text-xl"></i> Detalhes da Avaria
                         </h3>
                         
                         <div class="mb-4">
-                            <label class="block text-sm font-bold text-gray-700 mb-1">Data da Avaria *</label>
+                            <label class="block text-sm font-bold text-gray-700 mb-1">Data/Hora da Avaria *</label>
                             <input type="datetime-local" class="w-full border border-gray-300 rounded-lg p-3"
                                 value="${state.dataHoraAvaria}" oninput="state.dataHoraAvaria = this.value">
                         </div>
@@ -493,7 +491,7 @@
 
                         ${state.tipoEquipamento ? `
                         <div class="mb-4">
-                            <label class="block text-sm font-bold text-gray-700 mb-1">Componente/Avaria *</label>
+                            <label class="block text-sm font-bold text-gray-700 mb-1">Componente/Falha *</label>
                             <select class="w-full border border-gray-300 rounded-lg p-3 bg-white"
                                 onchange="state.tipoAvaria = this.value; state.showCustomAvaria = (this.value === 'Outro'); render()">
                                 <option value="" disabled ${!state.tipoAvaria ? 'selected' : ''}>Selecione...</option>
@@ -504,13 +502,13 @@
                         ` : ''}
 
                         <div class="mb-4">
-                            <label class="block text-sm font-bold text-gray-700 mb-1">Descrição do Problema *</label>
+                            <label class="block text-sm font-bold text-gray-700 mb-1">Descrição Detalhada *</label>
                             <textarea class="w-full border border-gray-300 rounded-lg p-3 h-24 resize-none" 
-                                placeholder="Detalhe o problema..." oninput="state.descricao = this.value">${state.descricao}</textarea>
+                                placeholder="Descreva o problema..." oninput="state.descricao = this.value">${state.descricao}</textarea>
                         </div>
                     </div>
 
-                    <!-- EXECUÇÃO -->
+                    <!-- EXECUÇÃO (SEM RESPONSÁVEL) -->
                     <div class="bg-white p-5 rounded-2xl shadow-sm">
                         <h3 class="font-bold text-[#1F4E78] mb-4 border-b pb-2 flex items-center gap-2">
                             <i class="ph ph-wrench text-xl"></i> Execução
@@ -523,13 +521,13 @@
                                 <option value="" disabled ${!state.oficina ? 'selected' : ''}>Selecione...</option>
                                 ${WORKSHOPS.map(w => `<option value="${w}" ${state.oficina === w ? 'selected' : ''}>${w}</option>`).join('')}
                             </select>
-                            ${state.showCustomOficina ? `<input type="text" class="mt-2 w-full border border-gray-300 rounded-lg p-3" placeholder="Digite o nome da oficina..." value="${state.oficinaCustom}" oninput="state.oficinaCustom = this.value">` : ''}
+                            ${state.showCustomOficina ? `<input type="text" class="mt-2 w-full border border-gray-300 rounded-lg p-3" placeholder="Nome da oficina..." value="${state.oficinaCustom}" oninput="state.oficinaCustom = this.value">` : ''}
                         </div>
-
+                        
                         <div class="mb-4">
-                            <label class="block text-sm font-bold text-gray-700 mb-1">Responsável/Mecânico *</label>
+                            <label class="block text-sm font-bold text-gray-700 mb-1">Observações (Opcional)</label>
                             <input type="text" class="w-full border border-gray-300 rounded-lg p-3"
-                                placeholder="Nome do responsável" value="${state.responsavel}" oninput="state.responsavel = this.value">
+                                placeholder="..." value="${state.observacoes}" oninput="state.observacoes = this.value">
                         </div>
                     </div>
 
@@ -545,7 +543,7 @@
 
         function renderCloseOrder() {
             const r = getMaintenanceHistory().find(x => x.id === state.closingId);
-            if(!r) return 'Erro';
+            if(!r) return 'Erro de registro';
 
             return `
                 <div class="bg-white p-6 rounded-2xl shadow-sm space-y-6">
@@ -558,27 +556,29 @@
                         <label class="block text-sm font-bold text-gray-700 mb-2">Data/Hora de Retorno *</label>
                         <input type="datetime-local" class="w-full border-2 border-gray-200 rounded-xl p-4 focus:border-[#1F4E78]"
                             value="${state.dataHoraFechamento}" oninput="state.dataHoraFechamento = this.value">
+                        <p class="text-xs text-gray-400 mt-1">O cálculo de horas será feito automaticamente ao salvar.</p>
                     </div>
 
+                    <!-- BOTÕES DE APROVAÇÃO -->
                     <div>
-                        <label class="block text-sm font-bold text-gray-700 mb-3">Resultado da Manutenção *</label>
-                        <div class="grid grid-cols-2 gap-3">
+                        <label class="block text-sm font-bold text-gray-700 mb-3 text-center">AVALIAÇÃO DA MANUTENÇÃO *</label>
+                        <div class="grid grid-cols-2 gap-4">
                             <button onclick="state.statusFechamento='Aprovada'; render()"
-                                class="p-4 rounded-xl border-2 font-bold transition-all flex flex-col items-center gap-2
+                                class="p-6 rounded-xl border-4 transition-all flex flex-col items-center gap-2 shadow-sm
                                 ${state.statusFechamento === 'Aprovada' 
-                                    ? 'bg-green-50 border-green-500 text-green-700' 
-                                    : 'border-gray-200 text-gray-400 hover:bg-gray-50'}">
-                                <i class="ph ph-thumbs-up text-3xl"></i>
-                                Aprovada
+                                    ? 'bg-green-50 border-green-500 text-green-700 scale-105' 
+                                    : 'border-gray-100 text-gray-400 hover:border-green-200'}">
+                                <i class="ph ph-check-circle text-4xl"></i>
+                                <span class="font-bold uppercase">Aprovada</span>
                             </button>
                             
-                            <button onclick="state.statusFechamento='Rejeitada'; render()"
-                                class="p-4 rounded-xl border-2 font-bold transition-all flex flex-col items-center gap-2
-                                ${state.statusFechamento === 'Rejeitada' 
-                                    ? 'bg-red-50 border-red-500 text-red-700' 
-                                    : 'border-gray-200 text-gray-400 hover:bg-gray-50'}">
-                                <i class="ph ph-thumbs-down text-3xl"></i>
-                                Rejeitada
+                            <button onclick="state.statusFechamento='Reprovada'; render()"
+                                class="p-6 rounded-xl border-4 transition-all flex flex-col items-center gap-2 shadow-sm
+                                ${state.statusFechamento === 'Reprovada' 
+                                    ? 'bg-red-50 border-red-500 text-red-700 scale-105' 
+                                    : 'border-gray-100 text-gray-400 hover:border-red-200'}">
+                                <i class="ph ph-x-circle text-4xl"></i>
+                                <span class="font-bold uppercase">Reprovada</span>
                             </button>
                         </div>
                     </div>
@@ -599,41 +599,73 @@
             const records = getMaintenanceHistory();
             if (!records.length) return `<div class="text-center py-12 text-gray-400"><i class="ph ph-files text-4xl mb-2"></i><p>Nenhum registro</p></div>`;
 
+            // LAYOUT DETALHADO PARA PRINT DE WHATSAPP
             return `
-                <div class="space-y-4">
+                <div class="space-y-6">
                     ${records.map(r => `
-                        <div class="bg-white p-4 rounded-2xl shadow-sm border-l-4 
-                            ${r.statusOrdem.includes('Aprovada') ? 'border-green-500' : 
-                              r.statusOrdem.includes('Rejeitada') ? 'border-red-500' : 
-                              r.statusOrdem === 'Aberta' ? 'border-blue-500' : 'border-gray-300'}">
-                            
-                            <div class="flex justify-between items-start mb-2">
-                                <h3 class="font-bold text-gray-800 text-lg">${r.placa}</h3>
-                                <span class="text-[10px] px-2 py-1 rounded-full font-bold uppercase
-                                    ${r.status === 'synced' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}">
-                                    ${r.status === 'synced' ? 'Sync OK' : 'Pendente'}
-                                </span>
-                            </div>
-                            
-                            <div class="text-sm text-gray-600 space-y-1 mb-3">
-                                <p class="truncate"><i class="ph ph-wrench mr-1"></i> ${r.tipoAvaria}</p>
-                                <p class="truncate"><i class="ph ph-storefront mr-1"></i> ${r.oficina}</p>
-                                <p><i class="ph ph-calendar mr-1"></i> ${formatDate(r.dataHoraAvaria)}</p>
-                                <div class="mt-2 inline-block px-2 py-1 rounded text-xs font-bold
-                                    ${r.statusOrdem.includes('Aprovada') ? 'bg-green-100 text-green-800' : 
-                                      r.statusOrdem.includes('Rejeitada') ? 'bg-red-100 text-red-800' : 'bg-blue-100 text-blue-800'}">
-                                    ${r.statusOrdem}
+                        <div class="bg-white rounded-xl shadow-md overflow-hidden border border-gray-200">
+                            <!-- Cabeçalho do Cartão -->
+                            <div class="p-3 text-white flex justify-between items-center
+                                ${r.statusOrdem.includes('Aprovada') ? 'bg-green-600' : 
+                                  r.statusOrdem.includes('Reprovada') ? 'bg-red-600' : 
+                                  r.statusOrdem === 'Aberta' ? 'bg-[#1F4E78]' : 'bg-gray-500'}">
+                                <div>
+                                    <h3 class="font-bold text-lg leading-tight">${r.placa}</h3>
+                                    <p class="text-xs opacity-90">${r.tipoEquipamento}</p>
+                                </div>
+                                <div class="text-right">
+                                    <span class="block text-xs font-bold uppercase tracking-wider">${r.statusOrdem}</span>
+                                    <span class="text-[10px] opacity-75">ID: ${r.id.slice(-6)}</span>
                                 </div>
                             </div>
 
-                            <div class="flex gap-2 border-t pt-3">
-                                <button onclick="loadRecordForEdit('${r.id}')" class="flex-1 py-2 bg-gray-50 text-gray-700 rounded-lg text-xs font-bold hover:bg-gray-100">EDITAR</button>
+                            <!-- Corpo do Cartão -->
+                            <div class="p-4 text-sm text-gray-700 space-y-3">
+                                
+                                <div class="grid grid-cols-2 gap-2 border-b border-gray-100 pb-2">
+                                    <div>
+                                        <span class="block text-xs text-gray-400 font-bold uppercase">Saída/Avaria</span>
+                                        <span class="font-semibold text-gray-800">${formatDisplayDate(r.dataHoraAvaria)}</span>
+                                    </div>
+                                    <div>
+                                        <span class="block text-xs text-gray-400 font-bold uppercase">Retorno</span>
+                                        <span class="font-semibold text-gray-800">${formatDisplayDate(r.dataHoraFechamento)}</span>
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <span class="block text-xs text-gray-400 font-bold uppercase">Falha Informada</span>
+                                    <div class="font-bold text-red-600">${r.tipoAvaria}</div>
+                                </div>
+
+                                <div class="bg-gray-50 p-2 rounded border border-gray-100">
+                                    <span class="block text-xs text-gray-400 font-bold uppercase mb-1">Descrição do Problema</span>
+                                    <p class="italic text-gray-600 leading-snug">"${r.descricaoAvaria}"</p>
+                                </div>
+
+                                <div class="grid grid-cols-2 gap-2 pt-1">
+                                    <div>
+                                        <span class="block text-xs text-gray-400 font-bold uppercase">Oficina</span>
+                                        <span class="font-medium">${r.oficina}</span>
+                                    </div>
+                                    <div>
+                                        <span class="block text-xs text-gray-400 font-bold uppercase">Supervisor</span>
+                                        <span class="font-medium">${r.supervisor}</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Rodapé de Ações (Não sai no print se quiser esconder, mas útil para operar) -->
+                            <div class="bg-gray-50 p-2 flex gap-2 border-t border-gray-100 no-print">
+                                <button onclick="loadRecordForEdit('${r.id}')" class="flex-1 py-2 bg-white border border-gray-300 rounded text-xs font-bold text-gray-600">EDITAR</button>
                                 ${!r.statusOrdem.includes('Manutenção') ? 
-                                    `<button onclick="state.closingId='${r.id}'; loadRecordForClose('${r.id}')" class="flex-1 py-2 bg-[#1F4E78] text-white rounded-lg text-xs font-bold">FECHAR</button>` : ''}
+                                    `<button onclick="loadRecordForClose('${r.id}')" class="flex-1 py-2 bg-[#1F4E78] text-white rounded text-xs font-bold shadow-sm">FECHAR ORDEM</button>` : ''}
                             </div>
                         </div>
                     `).join('')}
-                    <button onclick="if(confirm('Limpar?')) { localStorage.removeItem('maintenance_history'); render(); }" class="w-full py-6 text-red-300 text-xs">Limpar Cache Local</button>
+                    <div class="text-center pt-4 no-print">
+                        <button onclick="if(confirm('Limpar dados locais?')) { localStorage.removeItem('maintenance_history'); render(); }" class="text-red-300 text-xs underline">Limpar Cache</button>
+                    </div>
                 </div>
             `;
         }
@@ -645,7 +677,7 @@
                         <i class="ph ph-check text-4xl"></i>
                     </div>
                     <h2 class="text-2xl font-bold text-gray-800 mb-2">Sucesso!</h2>
-                    <p class="text-gray-500 mb-8">Operação realizada com sucesso.</p>
+                    <p class="text-gray-500 mb-8">Operação registrada e sincronizada.</p>
                     <button onclick="resetForm()" class="w-full bg-[#1F4E78] text-white font-bold py-4 rounded-xl shadow-lg mb-4">NOVA ORDEM</button>
                     <button onclick="state.view='history'; render()" class="w-full border-2 border-gray-200 font-bold py-4 rounded-xl text-gray-600">VER HISTÓRICO</button>
                 </div>
@@ -664,10 +696,8 @@
             state.descricao = '';
             state.oficina = '';
             state.oficinaCustom = '';
-            state.responsavel = '';
             state.observacoes = '';
             state.dataHoraAvaria = '';
-            state.searchTerm = '';
             state.statusOrdem = 'Aberta';
             state.showCustomManutencao = false;
             state.showCustomOficina = false;
